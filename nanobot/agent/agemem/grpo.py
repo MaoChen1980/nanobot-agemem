@@ -290,4 +290,15 @@ class GRPOCreditAssignment:
                     policy.record_access(mem_id, content or "")
                     memory_ids_seen.add(mem_id)
 
+            elif op == "auto_add" and mem_id and advantage > 0.2:
+                # Policy-initiated auto-add was beneficial
+                if content:
+                    rule = policy.record_self_assessed(
+                        content,
+                        importance=0.5 + advantage * 0.3,
+                    )
+                    if rule:
+                        updates.append(f"auto_add rule: {rule.pattern} (+{importance_delta:.2f})")
+                    memory_ids_seen.add(mem_id)
+
         return updates
