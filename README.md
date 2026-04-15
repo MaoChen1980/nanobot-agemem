@@ -131,6 +131,7 @@
 - [Configuration](#️-configuration)
 - [Multiple Instances](#-multiple-instances)
 - [Memory](#-memory)
+- [AgeMem (Conscious Memory)](#-agemem-conscious-memory)
 - [CLI Reference](#-cli-reference)
 - [In-Chat Commands](#-in-chat-commands)
 - [Python SDK](#-python-sdk)
@@ -1788,6 +1789,150 @@ time.
 - memory changes can be inspected and restored with built-in commands
 
 If you want the full design, see [docs/MEMORY.md](docs/MEMORY.md).
+
+## 🧠 AgeMem (Conscious Memory)
+
+> **This repo** is the development + testing branch for nanobot's AgeMem feature — the conscious memory layer inspired by the [AgeMem paper (arXiv:2601.01885)](https://arxiv.org/abs/2601.01885). It adds proactive memory management to nanobot's existing Dream-based memory system.
+
+### What is AgeMem?
+
+AgeMem ("Agentic Memory") gives nanobot **conscious memory** — the ability to learn what to remember, detect when it forgets, and proactively store important information before being asked. It works alongside nanobot's existing layered memory (history + Dream) without replacing it.
+
+**Core idea**: A small set of memory tools (add/retrieve/update/delete) forms the "working memory" interface. An importance policy learns which content patterns matter, a reflector detects retrieval gaps (forgotten facts), and GRPO credit assignment optimizes the memory policy over time.
+
+### How It Works
+
+AgeMem adds 6 memory tools that nanobot can call autonomously:
+
+| Tool | Description |
+|------|-------------|
+| `add_memory` | Store a fact/preference in long-term memory (LTM) |
+| `retrieve_memories` | Search LTM for relevant memories |
+| `update_memory` | Update importance/content of an existing memory |
+| `delete_memory` | Remove a memory from LTM |
+| `filter_memories` | List memories by tag or importance threshold |
+| `summarize_session` | Summarize conversation and store key points in LTM |
+
+**Per-turn feedback loop** (runs after each agent iteration):
+
+```
+1. before_iteration()
+   → GRPO trajectory starts (task description extracted from user message)
+
+2. after_iteration()
+   → Memory tool events recorded in trajectory:
+     - retrieve_memories → Reflector detects gaps (empty/irrelevant results)
+     - add_memory        → ImportanceScorer extracts signals → policy learns rule
+     - update_memory    → policy records access boost
+     - summarize_session → Rcontext reward computed
+   → Phase 2d: if response matches a learned auto-add rule, proactively store it
+
+3. finalize_content()  (sync, called at turn end)
+   → Rtask reward computed from final response quality
+   → GRPO broadcasts reward backward to all trajectory steps
+   → MemoryPolicy updated based on observed rewards
+```
+
+**Disk persistence** (in `workspace/memory/`):
+
+| File/Dir | What it stores |
+|----------|----------------|
+| `ltm.jsonl` | All LTM memory entries (one JSON per line) |
+| `gaps.jsonl` | Retrieval gap events — when nanobot failed to find relevant memory |
+| `policy_rules.jsonl` | Learned auto-add rules (importance patterns) |
+| `trajectories/` | GRPO trajectories — step-by-step memory operations per turn |
+
+### Configuration
+
+AgeMem is controlled by `MemoryConfig` in `config.json`:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "memory": {
+        "enabled": true,
+        "autoAddEnabled": true,
+        "maxLtmEntries": 1000,
+        "importanceThreshold": 0.3
+      }
+    }
+  }
+}
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `true` | Enable/disable the entire AgeMem system |
+| `autoAddEnabled` | `true` | Allow nanobot to proactively store memories based on learned rules |
+| `maxLtmEntries` | `1000` | Max entries in LTM before auto-compaction |
+| `importanceThreshold` | `0.3` | Minimum importance score to trigger auto-add |
+
+### How to Check If It's Working
+
+**1. Check log output** — When AgeMem is active, logs show:
+
+```
+# Trajectory starts
+MemoryHook: GRPO trajectory started for: {task description}
+
+# Memory tool called
+MemoryHook: explicit importance recorded: 0.95
+
+# Gap detected (retrieve returned nothing useful)
+MemoryHook: retrieve_memories returned empty (gap)
+
+# Auto-add triggered
+MemoryHook: auto-added memory id=..., importance=0.75, content='...'
+
+# Turn complete, rewards broadcast
+MemoryHook: GRPO completed, Rtask=0.720, 3 credits, 2 policy updates
+```
+
+**2. Check disk files** — After some interactions:
+
+```bash
+# List learned rules
+cat workspace/memory/policy_rules.jsonl
+
+# View retrieval gaps
+cat workspace/memory/gaps.jsonl
+
+# Check trajectory files
+ls workspace/memory/trajectories/
+```
+
+**3. Inspect LTM memories** — Use the agent itself:
+
+```
+You: What memories do you have stored?
+nanobot: [uses retrieve_memories tool internally, shows stored memories]
+```
+
+**4. Check with `/status`** — The status command shows whether memory is enabled.
+
+### The GRPO Credit Assignment
+
+AgeMem uses a simplified Group Relative Policy Optimization (GRPO) to learn memory importance:
+
+- Each conversation turn is a **trajectory** of memory operations
+- When the turn completes, a **reward signal** (Rtask = "did I answer well?") is broadcast **backward** to all steps
+- Steps that contributed to good outcomes get boosted importance; poor contributions are deprioritized
+- The `MemoryPolicy` accumulates these updates to form **auto-add rules** — patterns that trigger proactive memory storage in future turns
+
+This is the key difference from passive memory: nanobot learns *when* to store memories autonomously, not just *how* to retrieve them.
+
+### Relationship to Dream Memory
+
+| | Dream | AgeMem |
+|--|-------|--------|
+| **Purpose** | Long-term knowledge, persona, skill discovery | Proactive memory of recent facts, preferences, gaps |
+| **Storage** | `SOUL.md`, `USER.md`, `skills/` | `memory/ltm.jsonl` |
+| **Learning** | Workflow pattern recognition | Importance signal + GRPO credit assignment |
+| **Triggers** | Scheduled or manual | Every turn (automatic) |
+| **Access** | Agent reads files directly | Agent calls memory tools |
+
+Both systems coexist. Dream stores slow-changing knowledge; AgeMem handles fast-changing session context.
 
 ## 💻 CLI Reference
 
