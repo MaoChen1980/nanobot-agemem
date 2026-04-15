@@ -229,7 +229,7 @@ class FilterMemoriesTool(_MemoryTool):
 
 @tool_parameters(
     tool_parameters_schema(
-        description=StringSchema("Optional description of what to summarize from recent conversation"),
+        session_description=StringSchema("Optional description of what to summarize from recent conversation"),
     )
 )
 class SummarizeSessionTool(_MemoryTool):

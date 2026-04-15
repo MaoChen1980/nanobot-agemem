@@ -92,11 +92,12 @@ class MemoryPolicy:
         Creates a high-priority auto-add rule.
         """
         pattern = self._extract_pattern(content)
+        now = datetime.now()
         rule = AutoAddRule(
-            id=f"explicit_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            id=f"explicit_{now.strftime('%Y%m%d%H%M%S')}{now.microsecond:06d}",
             pattern=pattern,
             importance=importance,
-            created_at=datetime.now().isoformat(),
+            created_at=now.isoformat(),
             reason="explicit: user said remember this",
         )
         self._rules[rule.id] = rule
