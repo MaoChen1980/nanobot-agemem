@@ -57,8 +57,9 @@ class DefaultConstraintAgent:
         prompt = _build_constraint_prompt(node, parent_result, root_goal)
 
         try:
-            response = await self.provider.complete(
-                prompt=prompt,
+            messages = [{"role": "user", "content": prompt}]
+            response = await self.provider.chat(
+                messages=messages,
                 model=self.provider.get_default_model(),
                 max_tokens=512,
             )

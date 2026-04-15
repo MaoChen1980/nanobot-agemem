@@ -169,7 +169,7 @@ class TaskTreeService:
                 lines.append(f"  {content}")
         return "\n".join(lines)
 
-    async def confirm_task(self, chat_id: str, raw_goal: str, channel: str) -> str | None:
+    async def confirm_task(self, chat_id: str, raw_goal: str, channel: str, auto_confirm: bool = False) -> str | None:
         """Ask the user to confirm/enrich a task goal via LLM paraphrase.
 
         Returns the confirmed goal string, or None if the user cancelled.
@@ -200,8 +200,9 @@ Do NOT ask questions. Do NOT add new requirements. Only rephrase and clarify wha
 If the goal is already clear and specific, simply summarize it concisely."""
 
         try:
-            response = await self.provider.complete(
-                prompt=paraphrase_prompt,
+            messages = [{"role": "user", "content": paraphrase_prompt}]
+            response = await self.provider.chat(
+                messages=messages,
                 model=self.model,
                 max_tokens=512,
             )
@@ -209,6 +210,11 @@ If the goal is already clear and specific, simply summarize it concisely."""
         except Exception as e:
             logger.warning("Failed to paraphrase goal: {}", e)
             paraphrase = f"[Task Summary]\n{raw_goal}\n\n[Detailed Description]\n(LLM paraphrase unavailable)"
+
+        # Auto-confirm mode (non-interactive): skip confirmation prompt
+        if auto_confirm:
+            logger.info("TaskTree auto-confirm enabled, skipping user confirmation")
+            return paraphrase
 
         # Step 2: Publish paraphrase and ask for confirmation
         confirm_msg = (
@@ -291,7 +297,10 @@ If the goal is already clear and specific, simply summarize it concisely."""
 
         # Pre-execution confirmation (for new tasks, not resume)
         if saved_tree is None:
-            confirmed_goal = await self.confirm_task(inbound.chat_id, task_goal, inbound.channel)
+            confirmed_goal = await self.confirm_task(
+                inbound.chat_id, task_goal, inbound.channel,
+                auto_confirm=inbound.metadata.get("_tasktree_auto_confirm", False),
+            )
             if confirmed_goal is None:
                 # User cancelled
                 return OutboundMessage(

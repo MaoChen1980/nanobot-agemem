@@ -39,8 +39,9 @@ class LLMVerificationAgent:
         prompt = _build_verification_prompt(root_goal, results)
 
         try:
-            response = await self.provider.complete(
-                prompt=prompt,
+            messages = [{"role": "user", "content": prompt}]
+            response = await self.provider.chat(
+                messages=messages,
                 model=self._model,
                 max_tokens=1024,
             )

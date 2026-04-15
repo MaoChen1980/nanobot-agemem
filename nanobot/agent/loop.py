@@ -656,6 +656,14 @@ class AgentLoop:
         pending_queue: asyncio.Queue | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
+        # Priority commands (e.g. /plantask) are handled here for process_direct mode
+        raw = msg.content.strip()
+        if self.commands.is_priority(raw):
+            ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw=raw, loop=self)
+            result = await self.commands.dispatch_priority(ctx)
+            if result:
+                return result
+            # Fall through to normal processing if priority handler returned None
         # System messages: parse origin from chat_id ("channel:chat_id")
         if msg.channel == "system":
             channel, chat_id = (

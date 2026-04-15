@@ -1070,9 +1070,10 @@ def agent(
     # Single message mode
     if message:
         msg_stripped = message.strip()
-        if msg_stripped.startswith("/plantask"):
+        if msg_stripped.lower().startswith("/plantask "):
             # TaskTree mode: submit and wait for completion
             async def run_plantask():
+                import sys
                 router = RouterBus()
                 tasktree_service = TaskTreeService(
                     bus=router,
@@ -1087,20 +1088,33 @@ def agent(
                 await router.start_router()
                 await tasktree_service.start()
 
-                # Parse goal: "/plantask " followed by the actual goal
-                goal = msg_stripped[len("/plantask"):].strip()
+                # Parse goal: "/plantask " followed by the actual goal (case-insensitive prefix)
+                goal = msg_stripped[len("/plantask"):].strip()  # handles "/plantask " prefix
                 if not goal:
                     console.print("[yellow]/plantask requires a goal argument[/yellow]")
                     return
 
-                from nanobot.bus.events import InboundMessage
+                from nanobot.bus.events import InboundMessage, OutboundMessage
                 inbound = InboundMessage(
                     channel="cli",
                     sender_id="user",
                     chat_id=session_id.replace(":", "_"),
                     content=goal,
                     media=[],
+                    metadata={"_tasktree_auto_confirm": not sys.stdin.isatty()},
                 )
+
+                # Consume outbound in a background task so publish doesn't block
+                async def consume_outbound():
+                    while True:
+                        try:
+                            msg = await asyncio.wait_for(router.consume_outbound(), timeout=60.0)
+                        except asyncio.TimeoutError:
+                            continue
+                        if msg.content:
+                            console.print(msg.content)
+
+                consumer = asyncio.create_task(consume_outbound())
                 await tasktree_service.submit(inbound)
 
                 # Wait for the task to complete
@@ -1110,8 +1124,8 @@ def agent(
                         await t
                     except asyncio.CancelledError:
                         pass
-                # Response was already published to bus by _run_and_publish()
 
+                consumer.cancel()
                 await tasktree_service.stop()
                 await router.stop_router()
 

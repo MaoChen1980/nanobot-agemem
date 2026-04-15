@@ -69,7 +69,7 @@ class TestDefaultConstraintAgent:
     @pytest.mark.asyncio
     async def test_get_constraints_returns_parsed_from_llm(self):
         class FakeProvider:
-            async def complete(self, prompt, model, max_tokens):
+            async def chat(self, messages, model, max_tokens, **kwargs):
                 return type("Resp", (), {
                     "content": '{"max_depth": 8, "forbidden_actions": ["delete"], "failure_count_limit": 4}'
                 })()
@@ -87,7 +87,7 @@ class TestDefaultConstraintAgent:
     @pytest.mark.asyncio
     async def test_get_constraints_falls_back_on_llm_error(self):
         class FailProvider:
-            async def complete(self, prompt, model, max_tokens):
+            async def chat(self, messages, model, max_tokens, **kwargs):
                 raise RuntimeError("llm error")
 
             def get_default_model(self):
@@ -106,7 +106,7 @@ class TestDefaultConstraintAgent:
                 return []
 
         class FakeProvider:
-            async def complete(self, prompt, model, max_tokens):
+            async def chat(self, messages, model, max_tokens, **kwargs):
                 return type("Resp", (), {"content": '{"max_depth": 10, "forbidden_actions": [], "failure_count_limit": 10}'})()
 
             def get_default_model(self):
@@ -137,7 +137,7 @@ class TestDefaultConstraintAgent:
                 ]
 
         class FakeProvider:
-            async def complete(self, prompt, model, max_tokens):
+            async def chat(self, messages, model, max_tokens, **kwargs):
                 return type("Resp", (), {"content": '{"max_depth": 10, "forbidden_actions": [], "failure_count_limit": 10}'})()
 
             def get_default_model(self):
@@ -171,7 +171,7 @@ class TestDefaultConstraintAgent:
                 ]
 
         class FakeProvider:
-            async def complete(self, prompt, model, max_tokens):
+            async def chat(self, messages, model, max_tokens, **kwargs):
                 return type("Resp", (), {"content": '{"max_depth": 10, "forbidden_actions": [], "failure_count_limit": 10}'})()
 
             def get_default_model(self):
@@ -193,7 +193,7 @@ class TestDefaultConstraintAgent:
                 raise RuntimeError("retriever error")
 
         class FakeProvider:
-            async def complete(self, prompt, model, max_tokens):
+            async def chat(self, messages, model, max_tokens, **kwargs):
                 return type("Resp", (), {"content": '{"max_depth": 10, "forbidden_actions": [], "failure_count_limit": 10}'})()
 
             def get_default_model(self):

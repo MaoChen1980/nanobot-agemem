@@ -80,7 +80,7 @@ class TestLLMVerificationAgent:
     @pytest.mark.asyncio
     async def test_verify_returns_pass_on_success(self):
         class FakeProvider:
-            async def complete(self, prompt, model, max_tokens):
+            async def chat(self, messages, model, max_tokens, **kwargs):
                 return type("Resp", (), {"content": '{"passed": true, "failed_nodes": [], "reason": "goal achieved", "evidence": []}'})()
 
             def get_default_model(self):
@@ -94,7 +94,7 @@ class TestLLMVerificationAgent:
     @pytest.mark.asyncio
     async def test_verify_returns_fail_on_llm_failure(self):
         class FailProvider:
-            async def complete(self, prompt, model, max_tokens):
+            async def chat(self, messages, model, max_tokens, **kwargs):
                 raise RuntimeError("provider error")
 
             def get_default_model(self):
@@ -110,7 +110,7 @@ class TestLLMVerificationAgent:
         calls = []
 
         class CheckModelProvider:
-            async def complete(self, prompt, model, max_tokens):
+            async def chat(self, messages, model, max_tokens, **kwargs):
                 calls.append(model)
                 return type("Resp", (), {"content": '{"passed": true, "failed_nodes": [], "reason": "ok", "evidence": []}'})()
 
