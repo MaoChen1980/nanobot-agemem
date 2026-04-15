@@ -37,12 +37,23 @@ class CommandRouter:
 
     def __init__(self) -> None:
         self._priority: dict[str, Handler] = {}
+        self._priority_prefix: list[tuple[str, Handler]] = []  # (prefix, handler), longest first
         self._exact: dict[str, Handler] = {}
         self._prefix: list[tuple[str, Handler]] = []
         self._interceptors: list[Handler] = []
 
     def priority(self, cmd: str, handler: Handler) -> None:
         self._priority[cmd] = handler
+
+    def priority_prefix(self, pfx: str, handler: Handler) -> None:
+        """Register a prefix command that is checked as priority (before lock, before routing).
+
+        Unlike normal prefix commands, priority_prefix commands are handled before
+        the dispatch lock is acquired — useful for commands like /plantask that
+        should be universal and lightweight.
+        """
+        self._priority_prefix.append((pfx, handler))
+        self._priority_prefix.sort(key=lambda p: len(p[0]), reverse=True)
 
     def exact(self, cmd: str, handler: Handler) -> None:
         self._exact[cmd] = handler
@@ -55,13 +66,28 @@ class CommandRouter:
         self._interceptors.append(handler)
 
     def is_priority(self, text: str) -> bool:
-        return text.strip().lower() in self._priority
+        """Check if text matches a priority command (exact or prefix)."""
+        text_lower = text.strip().lower()
+        if text_lower in self._priority:
+            return True
+        # Also check priority prefix commands
+        for pfx, _ in self._priority_prefix:
+            if text_lower.startswith(pfx):
+                return True
+        return False
 
     async def dispatch_priority(self, ctx: CommandContext) -> OutboundMessage | None:
-        """Dispatch a priority command. Called from run() without the lock."""
-        handler = self._priority.get(ctx.raw.lower())
+        """Dispatch a priority command (exact or prefix). Called from run() without the lock."""
+        raw_lower = ctx.raw.lower()
+        # Try exact priority first
+        handler = self._priority.get(raw_lower)
         if handler:
             return await handler(ctx)
+        # Try priority prefix commands (longest match first)
+        for pfx, handler in self._priority_prefix:
+            if raw_lower.startswith(pfx):
+                ctx.args = ctx.raw[len(pfx):]  # Use raw (with original casing) for args
+                return await handler(ctx)
         return None
 
     async def dispatch(self, ctx: CommandContext) -> OutboundMessage | None:

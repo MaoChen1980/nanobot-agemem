@@ -8,7 +8,8 @@ from typing import Any
 
 from nanobot.agent.hook import AgentHook
 from nanobot.agent.loop import AgentLoop
-from nanobot.bus.queue import MessageBus
+from nanobot.agent.tasktree.service import TaskTreeService
+from nanobot.bus.router import RouterBus
 
 
 @dataclass(slots=True)
@@ -30,8 +31,10 @@ class Nanobot:
         print(result.content)
     """
 
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: AgentLoop, router: RouterBus, tasktree_service: TaskTreeService | None = None) -> None:
         self._loop = loop
+        self._router = router
+        self._tasktree = tasktree_service
 
     @classmethod
     def from_config(
@@ -42,11 +45,17 @@ class Nanobot:
     ) -> Nanobot:
         """Create a Nanobot instance from a config file.
 
-        Args:
-            config_path: Path to ``config.json``.  Defaults to
-                ``~/.nanobot/config.json``.
-            workspace: Override the workspace directory from config.
+        Uses RouterBus for message routing between AgentLoop and TaskTreeService.
         """
+        from nanobot.agent.agemem.retriever import MemoryRetriever
+        from nanobot.agent.agemem.store import MemoryStoreV2
+        from nanobot.agent.context import ContextBuilder
+        from nanobot.agent.tasktree.execution import (
+            DefaultConstraintAgent,
+            DefaultExecutionAgent,
+            LLMSubgoalParser,
+            LLMVerificationAgent,
+        )
         from nanobot.config.loader import load_config, resolve_config_env_vars
         from nanobot.config.schema import Config
 
@@ -63,13 +72,57 @@ class Nanobot:
             )
 
         provider = _make_provider(config)
-        bus = MessageBus()
+        router = RouterBus()
         defaults = config.agents.defaults
+        workspace_path = config.workspace_path
 
-        loop = AgentLoop(
-            bus=bus,
+        # Build shared components needed by both AgentLoop and TaskTreeService
+        memory_store = MemoryStoreV2(workspace_path)
+        memory_retriever = MemoryRetriever(memory_store)
+        context_builder = ContextBuilder(
+            workspace_path,
+            timezone=defaults.timezone,
+            disabled_skills=defaults.disabled_skills,
+            memory_config=defaults.memory,
+        )
+        session_manager = config.session_manager or None
+
+        # Lazily import SessionManager
+        if session_manager is None:
+            from nanobot.session.manager import SessionManager
+            session_manager = SessionManager(workspace_path)
+
+        # Build TaskTreeService
+        from nanobot.agent.tools.registry import ToolRegistry
+        tools = ToolRegistry()
+
+        tasktree_service = TaskTreeService(
+            bus=router,
             provider=provider,
-            workspace=config.workspace_path,
+            tools=tools,
+            context_builder=context_builder,
+            session_manager=session_manager,
+            memory_store=memory_store,
+            memory_retriever=memory_retriever,
+            model=defaults.model,
+        )
+
+        # Register TaskTreeService route on RouterBus
+        def _tasktree_predicate(msg: Any) -> bool:
+            content = getattr(msg, "content", "") or ""
+            metadata = getattr(msg, "metadata", {}) or {}
+            return (
+                content.strip().startswith("/plantask")
+                or bool(metadata.get("_tasktree_task"))
+            )
+
+        router.register_route("tasktree", _tasktree_predicate)
+
+        # AgentLoop receives everything else (non-TaskTree messages)
+        loop = AgentLoop(
+            bus=router,
+            provider=provider,
+            workspace=workspace_path,
             model=defaults.model,
             max_iterations=defaults.max_tool_iterations,
             context_window_tokens=defaults.context_window_tokens,
@@ -85,8 +138,9 @@ class Nanobot:
             disabled_skills=defaults.disabled_skills,
             session_ttl_minutes=defaults.session_ttl_minutes,
             memory_config=defaults.memory,
+            session_manager=session_manager,
         )
-        return cls(loop)
+        return cls(loop, router, tasktree_service)
 
     async def run(
         self,
@@ -115,6 +169,39 @@ class Nanobot:
 
         content = (response.content if response else None) or ""
         return RunResult(content=content, tools_used=[], messages=[])
+
+    # -------------------------------------------------------------------------
+    # TaskTree API (SDK-level access to TaskTreeService)
+    # -------------------------------------------------------------------------
+
+    async def run_tasktree(
+        self,
+        message: str,
+        session_key: str = "sdk:default",
+    ) -> None:
+        """Submit a TaskTree task for background execution.
+
+        Does not wait for completion. Use get_task_status() to check progress.
+        """
+        from nanobot.bus.events import InboundMessage
+        inbound = InboundMessage(
+            channel="cli",
+            sender_id="user",
+            chat_id=session_key,
+            content=message,
+            media=[],
+        )
+        await self._router.start_router()
+        await self._tasktree.start()
+        await self._tasktree.submit(inbound)
+
+    async def get_task_status(self, session_key: str = "sdk:default") -> str:
+        """Return current TaskTree progress as a string."""
+        return await self._tasktree.get_status(session_key)
+
+    async def cancel_task(self, session_key: str = "sdk:default") -> bool:
+        """Cancel the running TaskTree task for session_key. Returns True if cancelled."""
+        return await self._tasktree.cancel(session_key)
 
 
 def _make_provider(config: Any) -> Any:

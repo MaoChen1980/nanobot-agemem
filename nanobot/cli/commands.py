@@ -6,6 +6,7 @@ import select
 import signal
 import sys
 from contextlib import nullcontext
+from dataclasses import dataclass, replace as dataclass_replace
 from pathlib import Path
 from typing import Any
 
@@ -555,8 +556,9 @@ def serve(
 
     from loguru import logger
     from nanobot.agent.loop import AgentLoop
+    from nanobot.agent.tasktree.service import TaskTreeService
     from nanobot.api.server import create_app
-    from nanobot.bus.queue import MessageBus
+    from nanobot.bus.router import RouterBus
     from nanobot.session.manager import SessionManager
 
     if verbose:
@@ -570,7 +572,7 @@ def serve(
     port = port if port is not None else api_cfg.port
     timeout = timeout if timeout is not None else api_cfg.timeout
     sync_workspace_templates(runtime_config.workspace_path)
-    bus = MessageBus()
+    bus = RouterBus()
     provider = _make_provider(runtime_config)
     session_manager = SessionManager(runtime_config.workspace_path)
     agent_loop = AgentLoop(
@@ -637,7 +639,8 @@ def gateway(
 ):
     """Start the nanobot gateway."""
     from nanobot.agent.loop import AgentLoop
-    from nanobot.bus.queue import MessageBus
+    from nanobot.agent.tasktree.service import TaskTreeService
+    from nanobot.bus.router import RouterBus
     from nanobot.channels.manager import ChannelManager
     from nanobot.cron.service import CronService
     from nanobot.cron.types import CronJob
@@ -654,7 +657,7 @@ def gateway(
 
     console.print(f"{__logo__} Starting nanobot gateway version {__version__} on port {port}...")
     sync_workspace_templates(config.workspace_path)
-    bus = MessageBus()
+    bus = RouterBus()
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
 
@@ -665,6 +668,42 @@ def gateway(
     # Create cron service with workspace-scoped store
     cron_store_path = config.workspace_path / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
+
+    # Build TaskTreeService with routing
+    from nanobot.agent.context import ContextBuilder
+    context_builder = ContextBuilder(
+        config.workspace_path,
+        timezone=config.agents.defaults.timezone,
+        disabled_skills=config.agents.defaults.disabled_skills,
+        memory_config=config.agents.defaults.memory,
+    )
+    from nanobot.agent.agemem.retriever import MemoryRetriever
+    from nanobot.agent.agemem.store import MemoryStoreV2
+    memory_store = MemoryStoreV2(config.workspace_path)
+    memory_retriever = MemoryRetriever(memory_store)
+    from nanobot.agent.tools.registry import ToolRegistry
+    tools = ToolRegistry()
+
+    tasktree_service = TaskTreeService(
+        bus=bus,
+        provider=provider,
+        tools=tools,
+        context_builder=context_builder,
+        session_manager=session_manager,
+        memory_store=memory_store,
+        memory_retriever=memory_retriever,
+        model=config.agents.defaults.model,
+    )
+
+    def _tasktree_predicate(msg: Any) -> bool:
+        content = getattr(msg, "content", "") or ""
+        metadata = getattr(msg, "metadata", {}) or {}
+        # Priority commands like /plantask are handled in _agent_gateway_runner
+        if content.strip().lower().startswith("/plantask "):
+            return False
+        return bool(metadata.get("_tasktree_task"))
+
+    bus.register_route("tasktree", _tasktree_predicate)
 
     # Create agent with cron service
     agent = AgentLoop(
@@ -880,12 +919,78 @@ def gateway(
     ))
     console.print(f"[green]✓[/green] Dream: {dream_cfg.describe_schedule()}")
 
+    async def _agent_gateway_runner():
+        """AgentLoop consuming from router's default (non-routed) queue."""
+        while True:
+            try:
+                msg = await asyncio.wait_for(bus.consume_default_inbound(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+
+            # Intercept TaskTree confirm replies before normal dispatch
+            if msg.chat_id in tasktree_service._pending_confirms:
+                tasktree_service.submit_user_input(msg.chat_id, msg.content)
+                continue
+
+            # Route priority commands
+            raw = msg.content.strip()
+            if agent.commands.is_priority(raw):
+                # Special handling for /plantask: submit to TaskTreeService
+                raw_lower = raw.lower()
+                if raw_lower.startswith("/plantask "):
+                    goal = raw[len("/plantask"):].strip()
+                    inbound = type(msg)(
+                        channel=msg.channel,
+                        sender_id=msg.sender_id,
+                        chat_id=msg.chat_id,
+                        content=goal,
+                        media=msg.media,
+                        metadata={**(dict(getattr(msg, "metadata", {}) or {})), "_tasktree_task": True},
+                    )
+                    await tasktree_service.submit(inbound)
+                    continue
+                ctx = agent.commands.CommandContext(
+                    msg=msg, session=None, key=msg.session_key, raw=raw, loop=agent,
+                )
+                result = await agent.commands.dispatch_priority(ctx)
+                if result:
+                    await bus.publish_outbound(result)
+                continue
+
+            # Normal dispatch
+            effective_key = agent._effective_session_key(msg)
+            if effective_key in agent._pending_queues:
+                pending_msg = msg
+                if effective_key != msg.session_key:
+                    pending_msg = dataclass_replace(
+                        msg,
+                        session_key_override=effective_key,
+                    )
+                try:
+                    agent._pending_queues[effective_key].put_nowait(pending_msg)
+                except asyncio.QueueFull:
+                    logger.warning("Pending queue full for session {}", effective_key)
+            else:
+                task = asyncio.create_task(agent._dispatch(msg))
+                agent._active_tasks.setdefault(effective_key, []).append(task)
+                task.add_done_callback(
+                    lambda t, k=effective_key: (
+                        agent._active_tasks.get(k, []) and
+                        agent._active_tasks[k].remove(t)
+                        if t in agent._active_tasks.get(k, []) else None
+                    )
+                )
+
     async def run():
         try:
+            await bus.start_router()
+            await tasktree_service.start()
             await cron.start()
             await heartbeat.start()
             await asyncio.gather(
-                agent.run(),
+                _agent_gateway_runner(),
                 channels.start_all(),
                 _health_server(config.gateway.host, port),
             )
@@ -897,6 +1002,8 @@ def gateway(
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
         finally:
+            await tasktree_service.stop()
+            await bus.stop_router()
             await agent.close_mcp()
             heartbeat.stop()
             cron.stop()
@@ -920,34 +1027,213 @@ def agent(
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nanobot runtime logs during chat"),
 ):
-    """Interact with the agent directly."""
+    """Interact with the agent directly. Use /plantask <goal> to run a TaskTree."""
     from loguru import logger
 
     from nanobot.agent.loop import AgentLoop
-    from nanobot.bus.queue import MessageBus
+    from nanobot.agent.tasktree.service import TaskTreeService
+    from nanobot.bus.router import RouterBus
     from nanobot.cron.service import CronService
 
     config = _load_runtime_config(config, workspace)
     sync_workspace_templates(config.workspace_path)
-
-    bus = MessageBus()
-    provider = _make_provider(config)
-
-    # Preserve existing single-workspace installs, but keep custom workspaces clean.
-    if is_default_workspace(config.workspace_path):
-        _migrate_cron_store(config)
-
-    # Create cron service with workspace-scoped store
-    cron_store_path = config.workspace_path / "cron" / "jobs.json"
-    cron = CronService(cron_store_path)
 
     if logs:
         logger.enable("nanobot")
     else:
         logger.disable("nanobot")
 
+    # Preserve existing single-workspace installs, but keep custom workspaces clean.
+    if is_default_workspace(config.workspace_path):
+        _migrate_cron_store(config)
+
+    # Build shared components
+    provider = _make_provider(config)
+    cron_store_path = config.workspace_path / "cron" / "jobs.json"
+    cron = CronService(cron_store_path)
+    from nanobot.session.manager import SessionManager
+    session_manager = SessionManager(config.workspace_path)
+    from nanobot.agent.context import ContextBuilder
+    context_builder = ContextBuilder(
+        config.workspace_path,
+        timezone=config.agents.defaults.timezone,
+        disabled_skills=config.agents.defaults.disabled_skills,
+        memory_config=config.agents.defaults.memory,
+    )
+    from nanobot.agent.agemem.retriever import MemoryRetriever
+    from nanobot.agent.agemem.store import MemoryStoreV2
+    memory_store = MemoryStoreV2(config.workspace_path)
+    memory_retriever = MemoryRetriever(memory_store)
+    from nanobot.agent.tools.registry import ToolRegistry
+    tools = ToolRegistry()
+
+    # Single message mode
+    if message:
+        msg_stripped = message.strip()
+        if msg_stripped.startswith("/plantask"):
+            # TaskTree mode: submit and wait for completion
+            async def run_plantask():
+                router = RouterBus()
+                tasktree_service = TaskTreeService(
+                    bus=router,
+                    provider=provider,
+                    tools=tools,
+                    context_builder=context_builder,
+                    session_manager=session_manager,
+                    memory_store=memory_store,
+                    memory_retriever=memory_retriever,
+                    model=config.agents.defaults.model,
+                )
+                await router.start_router()
+                await tasktree_service.start()
+
+                # Parse goal: "/plantask " followed by the actual goal
+                goal = msg_stripped[len("/plantask"):].strip()
+                if not goal:
+                    console.print("[yellow]/plantask requires a goal argument[/yellow]")
+                    return
+
+                from nanobot.bus.events import InboundMessage
+                inbound = InboundMessage(
+                    channel="cli",
+                    sender_id="user",
+                    chat_id=session_id.replace(":", "_"),
+                    content=goal,
+                    media=[],
+                )
+                await tasktree_service.submit(inbound)
+
+                # Wait for the task to complete
+                t = tasktree_service._tasks.get(inbound.chat_id)
+                if t:
+                    try:
+                        await t
+                    except asyncio.CancelledError:
+                        pass
+                # Response was already published to bus by _run_and_publish()
+
+                await tasktree_service.stop()
+                await router.stop_router()
+
+            asyncio.run(run_plantask())
+            return
+
+        # Regular single message — use AgentLoop directly
+        async def run_once():
+            from nanobot.bus.queue import MessageBus
+            bus = MessageBus()
+            agent_loop = AgentLoop(
+                bus=bus,
+                provider=provider,
+                workspace=config.workspace_path,
+                model=config.agents.defaults.model,
+                max_iterations=config.agents.defaults.max_tool_iterations,
+                context_window_tokens=config.agents.defaults.context_window_tokens,
+                web_config=config.tools.web,
+                context_block_limit=config.agents.defaults.context_block_limit,
+                max_tool_result_chars=config.agents.defaults.max_tool_result_chars,
+                provider_retry_mode=config.agents.defaults.provider_retry_mode,
+                exec_config=config.tools.exec,
+                cron_service=cron,
+                restrict_to_workspace=config.tools.restrict_to_workspace,
+                mcp_servers=config.tools.mcp_servers,
+                channels_config=config.channels,
+                timezone=config.agents.defaults.timezone,
+                unified_session=config.agents.defaults.unified_session,
+                disabled_skills=config.agents.defaults.disabled_skills,
+                session_ttl_minutes=config.agents.defaults.session_ttl_minutes,
+                memory_config=config.agents.defaults.memory,
+            )
+            renderer = StreamRenderer(render_markdown=markdown)
+            response = await agent_loop.process_direct(
+                message, session_id,
+                on_stream=renderer.on_delta,
+                on_stream_end=renderer.on_end,
+            )
+            if not renderer.streamed:
+                await renderer.close()
+                _print_agent_response(
+                    response.content if response else "",
+                    render_markdown=markdown,
+                    metadata=response.metadata if response else None,
+                )
+            await agent_loop.close_mcp()
+
+        asyncio.run(run_once())
+        return
+
+    # Interactive mode
+    _run_agent_interactive(
+        config=config,
+        session_id=session_id,
+        markdown=markdown,
+        provider=provider,
+        cron=cron,
+        context_builder=context_builder,
+        session_manager=session_manager,
+        memory_store=memory_store,
+        memory_retriever=memory_retriever,
+        tools=tools,
+    )
+
+
+def _run_agent_interactive(
+    config,
+    session_id: str,
+    markdown: bool,
+    provider,
+    cron,
+    context_builder,
+    session_manager,
+    memory_store,
+    memory_retriever,
+    tools,
+):
+    """Shared interactive mode for agent command, used by both CLI entry points."""
+    from nanobot.agent.loop import AgentLoop
+    from nanobot.agent.tasktree.service import TaskTreeService
+    from nanobot.bus.events import InboundMessage
+    from nanobot.bus.router import RouterBus
+
+    restart_notice = consume_restart_notice_from_env()
+    if restart_notice and should_show_cli_restart_notice(restart_notice, session_id):
+        _print_agent_response(
+            format_restart_completed_message(restart_notice.started_at_raw),
+            render_markdown=False,
+        )
+
+    if ":" in session_id:
+        cli_channel, cli_chat_id = session_id.split(":", 1)
+    else:
+        cli_channel, cli_chat_id = "cli", session_id
+
+    router = RouterBus()
+
+    # Build TaskTreeService and register its route
+    tasktree_service = TaskTreeService(
+        bus=router,
+        provider=provider,
+        tools=tools,
+        context_builder=context_builder,
+        session_manager=session_manager,
+        memory_store=memory_store,
+        memory_retriever=memory_retriever,
+        model=config.agents.defaults.model,
+    )
+
+    def _tasktree_predicate(msg: Any) -> bool:
+        content = getattr(msg, "content", "") or ""
+        metadata = getattr(msg, "metadata", {}) or {}
+        return (
+            content.strip().startswith("/plantask")
+            or bool(metadata.get("_tasktree_task"))
+        )
+
+    router.register_route("tasktree", _tasktree_predicate)
+
+    # Build AgentLoop consuming from the router's default (non-routed) queue
     agent_loop = AgentLoop(
-        bus=bus,
+        bus=router,
         provider=provider,
         workspace=config.workspace_path,
         model=config.agents.defaults.model,
@@ -968,182 +1254,185 @@ def agent(
         session_ttl_minutes=config.agents.defaults.session_ttl_minutes,
         memory_config=config.agents.defaults.memory,
     )
-    restart_notice = consume_restart_notice_from_env()
-    if restart_notice and should_show_cli_restart_notice(restart_notice, session_id):
-        _print_agent_response(
-            format_restart_completed_message(restart_notice.started_at_raw),
-            render_markdown=False,
-        )
 
-    # Shared reference for progress callbacks
+    _init_prompt_session()
+    console.print(f"{__logo__} Interactive mode [bold blue]({config.agents.defaults.model})[/bold blue] — type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit\n")
+
+    def _handle_signal(signum, frame):
+        sig_name = signal.Signals(signum).name
+        _restore_terminal()
+        console.print(f"\nReceived {sig_name}, goodbye!")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _handle_signal)
+    if hasattr(signal, "SIGPIPE"):
+        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+
     _thinking: ThinkingSpinner | None = None
 
-    async def _cli_progress(content: str, *, tool_hint: bool = False) -> None:
-        ch = agent_loop.channels_config
-        if ch and tool_hint and not ch.send_tool_hints:
-            return
-        if ch and not tool_hint and not ch.send_progress:
-            return
-        _print_cli_progress_line(content, _thinking)
+    async def _consume_outbound():
+        while True:
+            try:
+                msg = await asyncio.wait_for(router.consume_outbound(), timeout=1.0)
 
-    if message:
-        # Single message mode — direct call, no bus needed
-        async def run_once():
-            renderer = StreamRenderer(render_markdown=markdown)
-            response = await agent_loop.process_direct(
-                message, session_id,
-                on_progress=_cli_progress,
-                on_stream=renderer.on_delta,
-                on_stream_end=renderer.on_end,
-            )
-            if not renderer.streamed:
-                await renderer.close()
-                _print_agent_response(
-                    response.content if response else "",
-                    render_markdown=markdown,
-                    metadata=response.metadata if response else None,
+                if msg.metadata.get("_stream_delta"):
+                    continue
+                if msg.metadata.get("_stream_end"):
+                    continue
+                if msg.metadata.get("_streamed"):
+                    continue
+                if msg.metadata.get("_tasktree_progress"):
+                    # TaskTree progress messages already shown by BusNotifierCallback._notify()
+                    continue
+
+                # TaskTree user input request: pause and wait for response
+                if msg.metadata.get("_tasktree_needs_input"):
+                    # Stop spinner and print the question
+                    if _thinking:
+                        _thinking.stop()
+                        _thinking = None
+                    console.print(f"\n{msg.content}")
+                    # Read user response synchronously (blocking, but this is the right UX)
+                    user_response = await _read_interactive_input_async()
+                    tasktree_service.submit_user_input(cli_chat_id, user_response)
+                    continue
+
+                if msg.metadata.get("_progress"):
+                    is_tool_hint = msg.metadata.get("_tool_hint", False)
+                    ch = agent_loop.channels_config
+                    if ch and is_tool_hint and not ch.send_tool_hints:
+                        pass
+                    elif ch and not is_tool_hint and not ch.send_progress:
+                        pass
+                    else:
+                        await _print_interactive_progress_line(msg.content, _thinking)
+                    continue
+
+                if msg.content:
+                    await _print_interactive_response(
+                        msg.content,
+                        render_markdown=markdown,
+                        metadata=msg.metadata,
+                    )
+
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+
+    async def _agent_loop_runner():
+        """Run AgentLoop consuming from router's default (non-routed) queue."""
+        while True:
+            try:
+                msg = await asyncio.wait_for(router.consume_default_inbound(), timeout=1.0)
+            except asyncio.TimeoutError:
+                agent_loop.auto_compact.check_expired(
+                    agent_loop._schedule_background,
+                    active_session_keys=agent_loop._pending_queues.keys(),
                 )
+                continue
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("Error consuming inbound message: {}", e)
+                continue
+
+            raw = msg.content.strip()
+            if agent_loop.commands.is_priority(raw):
+                ctx = agent_loop.commands.CommandContext(
+                    msg=msg, session=None, key=msg.session_key, raw=raw, loop=agent_loop,
+                )
+                result = await agent_loop.commands.dispatch_priority(ctx)
+                if result:
+                    await router.publish_outbound(result)
+                continue
+            effective_key = agent_loop._effective_session_key(msg)
+            if effective_key in agent_loop._pending_queues:
+                pending_msg = msg
+                if effective_key != msg.session_key:
+                    pending_msg = dataclass_replace(
+                        msg,
+                        session_key_override=effective_key,
+                    )
+                try:
+                    agent_loop._pending_queues[effective_key].put_nowait(pending_msg)
+                except asyncio.QueueFull:
+                    logger.warning("Pending queue full for session {}", effective_key)
+            else:
+                # Mirror AgentLoop.run(): create task for _dispatch
+                task = asyncio.create_task(agent_loop._dispatch(msg))
+                agent_loop._active_tasks.setdefault(effective_key, []).append(task)
+                task.add_done_callback(
+                    lambda t, k=effective_key: (
+                        agent_loop._active_tasks.get(k, []) and
+                        agent_loop._active_tasks[k].remove(t)
+                        if t in agent_loop._active_tasks.get(k, []) else None
+                    )
+                )
+
+    async def run_interactive():
+        router_task = asyncio.create_task(router.start_router())
+        agent_task = asyncio.create_task(_agent_loop_runner())
+        outbound_task = asyncio.create_task(_consume_outbound())
+        tasktree_task = asyncio.create_task(tasktree_service.start())
+
+        try:
+            while True:
+                try:
+                    _flush_pending_tty_input()
+                    user_input = await _read_interactive_input_async()
+                    command = user_input.strip()
+                    if not command:
+                        continue
+
+                    if _is_exit_command(command):
+                        _restore_terminal()
+                        console.print("\nGoodbye!")
+                        break
+
+                    # Built-in TaskTree commands
+                    if command.startswith("/taskstatus"):
+                        status = await tasktree_service.get_status(cli_chat_id)
+                        console.print(status)
+                        continue
+                    if command.startswith("/taskcancel"):
+                        cancelled = await tasktree_service.cancel(cli_chat_id)
+                        console.print("🛑 TaskTree 任务已取消" if cancelled else "没有正在运行的 TaskTree 任务")
+                        continue
+
+                    # Route to appropriate consumer
+                    await router.publish_inbound(InboundMessage(
+                        channel=cli_channel,
+                        sender_id="user",
+                        chat_id=cli_chat_id,
+                        content=user_input,
+                        metadata={"_wants_stream": True},
+                    ))
+
+                except KeyboardInterrupt:
+                    _restore_terminal()
+                    console.print("\nGoodbye!")
+                    break
+                except EOFError:
+                    _restore_terminal()
+                    console.print("\nGoodbye!")
+                    break
+        finally:
+            agent_loop.stop()
+            router_task.cancel()
+            agent_task.cancel()
+            outbound_task.cancel()
+            tasktree_task.cancel()
+            await asyncio.gather(
+                router_task, agent_task, outbound_task, tasktree_task,
+                return_exceptions=True,
+            )
             await agent_loop.close_mcp()
 
-        asyncio.run(run_once())
-    else:
-        # Interactive mode — route through bus like other channels
-        from nanobot.bus.events import InboundMessage
-        _init_prompt_session()
-        console.print(f"{__logo__} Interactive mode [bold blue]({config.agents.defaults.model})[/bold blue] — type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit\n")
-
-        if ":" in session_id:
-            cli_channel, cli_chat_id = session_id.split(":", 1)
-        else:
-            cli_channel, cli_chat_id = "cli", session_id
-
-        def _handle_signal(signum, frame):
-            sig_name = signal.Signals(signum).name
-            _restore_terminal()
-            console.print(f"\nReceived {sig_name}, goodbye!")
-            sys.exit(0)
-
-        signal.signal(signal.SIGINT, _handle_signal)
-        signal.signal(signal.SIGTERM, _handle_signal)
-        # SIGHUP is not available on Windows
-        if hasattr(signal, 'SIGHUP'):
-            signal.signal(signal.SIGHUP, _handle_signal)
-        # Ignore SIGPIPE to prevent silent process termination when writing to closed pipes
-        # SIGPIPE is not available on Windows
-        if hasattr(signal, 'SIGPIPE'):
-            signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-
-        async def run_interactive():
-            bus_task = asyncio.create_task(agent_loop.run())
-            turn_done = asyncio.Event()
-            turn_done.set()
-            turn_response: list[tuple[str, dict]] = []
-            renderer: StreamRenderer | None = None
-
-            async def _consume_outbound():
-                while True:
-                    try:
-                        msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
-
-                        if msg.metadata.get("_stream_delta"):
-                            if renderer:
-                                await renderer.on_delta(msg.content)
-                            continue
-                        if msg.metadata.get("_stream_end"):
-                            if renderer:
-                                await renderer.on_end(
-                                    resuming=msg.metadata.get("_resuming", False),
-                                )
-                            continue
-                        if msg.metadata.get("_streamed"):
-                            turn_done.set()
-                            continue
-
-                        if msg.metadata.get("_progress"):
-                            is_tool_hint = msg.metadata.get("_tool_hint", False)
-                            ch = agent_loop.channels_config
-                            if ch and is_tool_hint and not ch.send_tool_hints:
-                                pass
-                            elif ch and not is_tool_hint and not ch.send_progress:
-                                pass
-                            else:
-                                await _print_interactive_progress_line(msg.content, _thinking)
-                            continue
-
-                        if not turn_done.is_set():
-                            if msg.content:
-                                turn_response.append((msg.content, dict(msg.metadata or {})))
-                            turn_done.set()
-                        elif msg.content:
-                            await _print_interactive_response(
-                                msg.content,
-                                render_markdown=markdown,
-                                metadata=msg.metadata,
-                            )
-
-                    except asyncio.TimeoutError:
-                        continue
-                    except asyncio.CancelledError:
-                        break
-
-            outbound_task = asyncio.create_task(_consume_outbound())
-
-            try:
-                while True:
-                    try:
-                        _flush_pending_tty_input()
-                        # Stop spinner before user input to avoid prompt_toolkit conflicts
-                        if renderer:
-                            renderer.stop_for_input()
-                        user_input = await _read_interactive_input_async()
-                        command = user_input.strip()
-                        if not command:
-                            continue
-
-                        if _is_exit_command(command):
-                            _restore_terminal()
-                            console.print("\nGoodbye!")
-                            break
-
-                        turn_done.clear()
-                        turn_response.clear()
-                        renderer = StreamRenderer(render_markdown=markdown)
-
-                        await bus.publish_inbound(InboundMessage(
-                            channel=cli_channel,
-                            sender_id="user",
-                            chat_id=cli_chat_id,
-                            content=user_input,
-                            metadata={"_wants_stream": True},
-                        ))
-
-                        await turn_done.wait()
-
-                        if turn_response:
-                            content, meta = turn_response[0]
-                            if content and not meta.get("_streamed"):
-                                if renderer:
-                                    await renderer.close()
-                                _print_agent_response(
-                                    content, render_markdown=markdown, metadata=meta,
-                                )
-                        elif renderer and not renderer.streamed:
-                            await renderer.close()
-                    except KeyboardInterrupt:
-                        _restore_terminal()
-                        console.print("\nGoodbye!")
-                        break
-                    except EOFError:
-                        _restore_terminal()
-                        console.print("\nGoodbye!")
-                        break
-            finally:
-                agent_loop.stop()
-                outbound_task.cancel()
-                await asyncio.gather(bus_task, outbound_task, return_exceptions=True)
-                await agent_loop.close_mcp()
-
-        asyncio.run(run_interactive())
+    asyncio.run(run_interactive())
 
 
 # ============================================================================
