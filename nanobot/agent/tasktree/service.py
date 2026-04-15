@@ -70,6 +70,8 @@ class TaskTreeService:
         self._input_results: dict[str, str] = {}
         # chat_id → asyncio.Event (for pending task confirmations)
         self._pending_confirms: dict[str, asyncio.Event] = {}
+        # chat_id → channel (for routing outbound messages to correct channel)
+        self._channels: dict[str, str] = {}
 
     async def start(self) -> None:
         """Start the service."""
@@ -126,12 +128,14 @@ class TaskTreeService:
         task.cancel()
         self._tasks.pop(chat_id, None)
         self._schedulers.pop(chat_id, None)
-        # Clean up any pending input/confirm events
+        # Clean up any pending input/confirm events and channel
         self._input_events.pop(chat_id, None)
         self._pending_confirms.pop(chat_id, None)
-        # Notify cancellation
+        self._channels.pop(chat_id, None)
+        # Notify cancellation on the correct channel
+        channel = self._channels.get(chat_id, "cli")
         await self.bus.publish_outbound(OutboundMessage(
-            channel="cli",
+            channel=channel,
             chat_id=chat_id,
             content="🛑 TaskTree 任务已取消",
             metadata={"_tasktree_cancelled": True},
@@ -260,7 +264,7 @@ If the goal is already clear and specific, simply summarize it concisely."""
         if event is not None:
             event.set()
 
-    async def request_user_input(self, chat_id: str, question: str) -> asyncio.Event:
+    async def request_user_input(self, chat_id: str, question: str, channel: str) -> asyncio.Event:
         """Called by ExecutionAgent when it needs user input.
 
         Returns an Event that will be set when the user responds.
@@ -268,9 +272,9 @@ If the goal is already clear and specific, simply summarize it concisely."""
         """
         event = asyncio.Event()
         self._input_events[chat_id] = event
-        # Publish the question to the user
+        # Publish the question to the user on the correct channel
         await self.bus.publish_outbound(OutboundMessage(
-            channel="cli",
+            channel=channel,
             chat_id=chat_id,
             content="🤔 需要你的介入：" + question,
             metadata={"_tasktree_needs_input": True, "_task_id": chat_id},
@@ -293,6 +297,7 @@ If the goal is already clear and specific, simply summarize it concisely."""
         """
         task_goal = inbound.content
         session_key = f"tasktree:{inbound.chat_id}"
+        self._channels[inbound.chat_id] = inbound.channel
         logger.info("TaskTreeService: starting task for chat_id={}", inbound.chat_id)
 
         # Pre-execution confirmation (for new tasks, not resume)
@@ -330,6 +335,7 @@ If the goal is already clear and specific, simply summarize it concisely."""
             )
         finally:
             self._schedulers.pop(inbound.chat_id, None)
+            self._channels.pop(inbound.chat_id, None)
 
         logger.info("TaskTreeService: task complete for chat_id={}", inbound.chat_id)
 

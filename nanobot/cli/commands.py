@@ -929,8 +929,9 @@ def gateway(
             except asyncio.CancelledError:
                 break
 
-            # Intercept TaskTree confirm replies before normal dispatch
-            if msg.chat_id in tasktree_service._pending_confirms:
+            # Intercept TaskTree user input replies before normal dispatch
+            # (both confirm_task and request_user_input store events here)
+            if msg.chat_id in tasktree_service._pending_confirms or msg.chat_id in tasktree_service._input_events:
                 tasktree_service.submit_user_input(msg.chat_id, msg.content)
                 continue
 
