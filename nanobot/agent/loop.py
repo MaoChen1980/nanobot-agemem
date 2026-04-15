@@ -11,11 +11,15 @@ from contextlib import AsyncExitStack, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+if TYPE_CHECKING:
+    from nanobot.config.schema import MemoryConfig
+
 from loguru import logger
 
 from nanobot.agent.autocompact import AutoCompact
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.hook import AgentHook, AgentHookContext, CompositeHook
+from nanobot.agent.hooks.memory_hook import MemoryHook
 from nanobot.agent.memory import Consolidator, Dream
 from nanobot.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
 from nanobot.agent.skills import BUILTIN_SKILLS_DIR
@@ -29,6 +33,14 @@ from nanobot.agent.tools.search import GlobTool, GrepTool
 from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
+from nanobot.agent.tools.memory import (
+    AddMemoryTool,
+    DeleteMemoryTool,
+    FilterMemoriesTool,
+    RetrieveMemoriesTool,
+    SummarizeSessionTool,
+    UpdateMemoryTool,
+)
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.command import CommandContext, CommandRouter, register_builtin_commands
@@ -156,6 +168,7 @@ class AgentLoop:
         hooks: list[AgentHook] | None = None,
         unified_session: bool = False,
         disabled_skills: list[str] | None = None,
+        memory_config: "MemoryConfig | None" = None,
     ):
         from nanobot.config.schema import ExecToolConfig, WebToolsConfig
 
@@ -188,7 +201,23 @@ class AgentLoop:
         self._last_usage: dict[str, int] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
 
-        self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
+        # Automatic MemoryHook for conscious memory (Reflector + MemoryPolicy)
+        # Uses same model as main agent for LLM-as-judge importance scoring
+        # Only enabled when memory_config.enabled != False
+        self._memory_hook: MemoryHook | None = None
+        if memory_config is None or memory_config.enabled is not False:
+            from nanobot.config.schema import MemoryConfig
+            cfg = memory_config or MemoryConfig()
+            model = model or provider.get_default_model()
+            self._memory_hook = MemoryHook(
+                workspace,
+                provider=provider,
+                model=model,
+                auto_add_enabled=cfg.auto_add_enabled,
+            )
+            self._extra_hooks.append(self._memory_hook)
+
+        self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills, memory_config=memory_config)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.runner = AgentRunner(provider)
@@ -240,6 +269,7 @@ class AgentLoop:
             store=self.context.memory,
             provider=provider,
             model=self.model,
+            workspace=self.workspace,
         )
         self._register_default_tools()
         self.commands = CommandRouter()
@@ -283,6 +313,16 @@ class AgentLoop:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
             )
+        # AgeMem memory tools
+        for cls in (
+            AddMemoryTool,
+            UpdateMemoryTool,
+            DeleteMemoryTool,
+            RetrieveMemoriesTool,
+            FilterMemoriesTool,
+            SummarizeSessionTool,
+        ):
+            self.tools.register(cls(workspace=self.workspace))
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -641,6 +681,7 @@ class AgentLoop:
                 current_message=msg.content, channel=channel, chat_id=chat_id,
                 session_summary=pending,
                 current_role=current_role,
+                memory_context=self.context.get_memory_context_for_query(msg.content),
             )
             final_content, _, all_msgs, _, _ = await self._run_agent_loop(
                 messages, session=session, channel=channel, chat_id=chat_id,
@@ -696,6 +737,7 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
+            memory_context=self.context.get_memory_context_for_query(msg.content),
         )
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:

@@ -7,10 +7,17 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any
 
+from typing import TYPE_CHECKING
+
+from nanobot.agent.agemem.retriever import MemoryRetriever
+from nanobot.agent.agemem.store import MemoryStoreV2
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.skills import SkillsLoader
 from nanobot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 from nanobot.utils.prompt_templates import render_template
+
+if TYPE_CHECKING:
+    from nanobot.config.schema import MemoryConfig
 
 
 class ContextBuilder:
@@ -21,27 +28,73 @@ class ContextBuilder:
     _MAX_RECENT_HISTORY = 50
     _RUNTIME_CONTEXT_END = "[/Runtime Context]"
 
-    def __init__(self, workspace: Path, timezone: str | None = None, disabled_skills: list[str] | None = None):
+    def __init__(self, workspace: Path, timezone: str | None = None, disabled_skills: list[str] | None = None, memory_config: "MemoryConfig | None" = None):
         self.workspace = workspace
         self.timezone = timezone
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
+        self._memory_config = memory_config
+        self._retriever: "MemoryRetriever | None" = None
+
+    def _get_retriever(self) -> "MemoryRetriever":
+        """Lazily create the BM25 memory retriever."""
+        if self._retriever is None:
+            from nanobot.agent.agemem.retriever import MemoryRetriever
+            from nanobot.agent.agemem.store import MemoryStoreV2
+            self._retriever = MemoryRetriever(MemoryStoreV2(self.workspace))
+        return self._retriever
+
+    def get_memory_context_for_query(self, query: str, top_k: int = 5) -> str:
+        """Retrieve relevant memories for a query using BM25 scoring.
+
+        Returns a formatted memory context string for injection into the system prompt.
+        This enables query-specific memory retrieval rather than full MEMORY.md injection.
+        Only active when memory_config.enabled != False.
+        """
+        # Skip if AgeMem memory system is disabled
+        if self._memory_config is not None and self._memory_config.enabled is False:
+            return ""
+        retriever = self._get_retriever()
+        scored = retriever.retrieve(query, top_k=top_k)
+        if not scored:
+            return ""
+
+        lines = []
+        for se in scored:
+            e = se.entry
+            relevance = f"[relevance={se.score:.2f}]"
+            tags = f"[tags={', '.join(e.tags)}]" if e.tags else ""
+            lines.append(f"- {relevance} {tags} {e.content[:150]}{'...' if len(e.content) > 150 else ''}")
+
+        return "## Retrieved Memories\n" + "\n".join(lines)
 
     def build_system_prompt(
         self,
         skill_names: list[str] | None = None,
         channel: str | None = None,
+        memory_context: str | None = None,
     ) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills."""
+        """Build the system prompt from identity, bootstrap files, memory, and skills.
+
+        Args:
+            skill_names: skill names to include.
+            channel: chat channel for identity.
+            memory_context: optional pre-retrieved memory context (BM25 selected).
+                           If None, falls back to legacy MEMORY.md injection.
+        """
         parts = [self._get_identity(channel=channel)]
 
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
             parts.append(bootstrap)
 
-        memory = self.memory.get_memory_context()
-        if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
-            parts.append(f"# Memory\n\n{memory}")
+        if memory_context:
+            parts.append(f"# Memory\n\n{memory_context}")
+        else:
+            # Legacy: full MEMORY.md injection (backward compat)
+            memory = self.memory.get_memory_context()
+            if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
+                parts.append(f"# Memory\n\n{memory}")
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -136,8 +189,14 @@ class ContextBuilder:
         chat_id: str | None = None,
         current_role: str = "user",
         session_summary: str | None = None,
+        memory_context: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Build the complete message list for an LLM call."""
+        """Build the complete message list for an LLM call.
+
+        Args:
+            memory_context: optional BM25-retrieved memory context. If provided,
+                           overrides the legacy MEMORY.md injection in system prompt.
+        """
         runtime_ctx = self._build_runtime_context(channel, chat_id, self.timezone, session_summary=session_summary)
         user_content = self._build_user_content(current_message, media)
 
@@ -148,7 +207,7 @@ class ContextBuilder:
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
         messages = [
-            {"role": "system", "content": self.build_system_prompt(skill_names, channel=channel)},
+            {"role": "system", "content": self.build_system_prompt(skill_names, channel=channel, memory_context=memory_context)},
             *history,
         ]
         if messages[-1].get("role") == current_role:

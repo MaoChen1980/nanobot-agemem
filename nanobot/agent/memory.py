@@ -558,6 +558,10 @@ class Dream:
     Phase 1 produces an analysis summary (plain LLM call).
     Phase 2 delegates to AgentRunner with read_file / edit_file tools so the
     LLM can make targeted, incremental edits instead of replacing entire files.
+
+    AgeMem Integration (Phase 3):
+    - Also registers AgeMem memory tools (add_memory, update_memory, delete_memory)
+    - After processing, calls reflector.reflect() to learn from memory gaps
     """
 
     def __init__(
@@ -568,6 +572,7 @@ class Dream:
         max_batch_size: int = 20,
         max_iterations: int = 10,
         max_tool_result_chars: int = 16_000,
+        workspace: Path | None = None,
     ):
         self.store = store
         self.provider = provider
@@ -576,17 +581,45 @@ class Dream:
         self.max_iterations = max_iterations
         self.max_tool_result_chars = max_tool_result_chars
         self._runner = AgentRunner(provider)
+        self._workspace = workspace or store.workspace
+        self._reflector = None  # Lazily initialized
+        self._policy = None
         self._tools = self._build_tools()
+
+    @property
+    def reflector(self):
+        """Lazily create Reflector for gap detection."""
+        if self._reflector is None:
+            from nanobot.agent.agemem.reflector import Reflector
+            self._reflector = Reflector(self._workspace)
+        return self._reflector
+
+    @property
+    def policy(self):
+        """Lazily create MemoryPolicy for importance learning."""
+        if self._policy is None:
+            from nanobot.agent.agemem.policy import MemoryPolicy
+            self._policy = MemoryPolicy(self._workspace)
+        return self._policy
 
     # -- tool registry -------------------------------------------------------
 
     def _build_tools(self) -> ToolRegistry:
-        """Build a minimal tool registry for the Dream agent."""
+        """Build a minimal tool registry for the Dream agent.
+
+        Includes both filesystem tools (for editing SOUL.md, USER.md, MEMORY.md)
+        and AgeMem memory tools (for structured memory management).
+        """
         from nanobot.agent.skills import BUILTIN_SKILLS_DIR
         from nanobot.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+        from nanobot.agent.tools.memory import (
+            AddMemoryTool,
+            DeleteMemoryTool,
+            UpdateMemoryTool,
+        )
 
         tools = ToolRegistry()
-        workspace = self.store.workspace
+        workspace = self._workspace
         # Allow reading builtin skills for reference during skill creation
         extra_read = [BUILTIN_SKILLS_DIR] if BUILTIN_SKILLS_DIR.exists() else None
         tools.register(ReadFileTool(
@@ -600,6 +633,12 @@ class Dream:
         skills_dir = workspace / "skills"
         skills_dir.mkdir(parents=True, exist_ok=True)
         tools.register(WriteFileTool(workspace=workspace, allowed_dir=skills_dir))
+
+        # AgeMem memory tools (Phase 3)
+        tools.register(AddMemoryTool(workspace=workspace))
+        tools.register(UpdateMemoryTool(workspace=workspace))
+        tools.register(DeleteMemoryTool(workspace=workspace))
+
         return tools
 
     # -- skill listing --------------------------------------------------------
@@ -763,4 +802,33 @@ class Dream:
             if sha:
                 logger.info("Dream commit: {}", sha)
 
+        # Phase 3: AgeMem reflection - learn from memory gaps
+        await self._run_reflection()
+
         return True
+
+    async def _run_reflection(self) -> None:
+        """Process memory gaps and update the proactive memory policy.
+
+        This is the AgeMem reflection loop:
+        1. Analyze gap history via reflector.reflect()
+        2. Update MemoryPolicy with learned rules
+        3. Log the learned patterns
+        """
+        try:
+            recommendations = self.reflector.reflect()
+            if recommendations:
+                rules = self.policy.record_reflected(recommendations)
+                logger.info(
+                    "Dream reflection: {} recommendations -> {} policy rules updated",
+                    len(recommendations), len(rules),
+                )
+                for r in rules[:5]:
+                    logger.debug(
+                        "  Policy rule: pattern='{}', importance={}, reason='{}'",
+                        r.pattern, r.importance, r.reason,
+                    )
+            else:
+                logger.debug("Dream reflection: no gap-based recommendations")
+        except Exception:
+            logger.exception("Dream reflection failed")

@@ -59,6 +59,16 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
+class MemoryConfig(Base):
+    """AgeMem structured memory configuration."""
+
+    enabled: bool = Field(default=True)  # Enable AgeMem memory system
+    auto_add_enabled: bool = Field(default=True)  # Enable proactive auto-add
+    max_ltm_entries: int = Field(default=1000, ge=1)
+    importance_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
+    embedding_model: str | None = Field(default=None)  # Optional dedicated embedder
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -85,6 +95,7 @@ class AgentDefaults(Base):
         serialization_alias="idleCompactAfterMinutes",
     )  # Auto-compact idle threshold in minutes (0 = disabled)
     dream: DreamConfig = Field(default_factory=DreamConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
 
 class AgentsConfig(Base):
