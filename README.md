@@ -21,6 +21,7 @@
 
 ## 📢 News
 
+- **2026-04-16** 🌳 **TaskTree** — hierarchical planning with depth-first execution, automatic task decomposition, replan on failure, and verification. Try `/plantask <goal>` for complex multi-step tasks.
 - **2026-04-14** 🚀 Released **v0.1.5.post1** — Dream skill discovery, mid-turn follow-up injection, WebSocket channel, and deeper channel integrations. Please see [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.5.post1) for details.
 - **2026-04-13** 🛡️ Agent turn hardened — user messages persisted early, auto-compact skips active tasks.
 - **2026-04-12** 🔒 Lark global domain support, Dream learns discovered skills, shell sandbox tightened.
@@ -132,6 +133,7 @@
 - [Multiple Instances](#-multiple-instances)
 - [Memory](#-memory)
 - [AgeMem (Conscious Memory)](#-agemem-conscious-memory)
+- [TaskTree (Hierarchical Planning)](#-tasktree-hierarchical-planning)
 - [CLI Reference](#-cli-reference)
 - [In-Chat Commands](#-in-chat-commands)
 - [Python SDK](#-python-sdk)
@@ -1934,6 +1936,58 @@ This is the key difference from passive memory: nanobot learns *when* to store m
 
 Both systems coexist. Dream stores slow-changing knowledge; AgeMem handles fast-changing session context.
 
+## 🌳 TaskTree (Hierarchical Planning)
+
+TaskTree upgrades nanobot's flat single-layer ReAct loop into a **hierarchical task decomposition engine**. For complex, multi-step goals, TaskTree breaks them into a tree of subtasks, executes them depth-first, replans on failure, and verifies each result — all autonomously.
+
+### When to Use `/plantask`
+
+Use the regular agent for simple, single-turn tasks. Use `/plantask` when:
+- The goal requires multiple independent steps
+- The optimal approach is unclear and needs exploratory decomposition
+- A step might fail and needs alternative strategies
+- You want the agent to plan before acting
+
+### How It Works
+
+```
+User: /plantask Build a web scraper that crawls GitHub trending
+       ↓
+TaskTree Root Node (decomposition)
+       ↓
+[Subtask 1] → [Subtask 1.1] → ... (depth-first)
+[Subtask 2]
+...
+       ↓
+Verification per node → retry or replan if failed
+       ↓
+Final result delivered to user
+```
+
+**Execution flow:**
+1. **LLM paraphrase + confirmation** — TaskTree rephrases your goal and asks for confirmation before starting
+2. **Depth-first execution** — picks the deepest pending node, executes it, bubbles up on completion
+3. **Verification** — each node result is verified; failed nodes trigger replan or bubble-up
+4. **MAX_CHILDREN=10** — a parent can spawn up to 10 subtasks; beyond that the parent fails and propagates upward
+5. **Failure handling** — constraint violations mark nodes BLOCKED; execution failures spawn sibling replans; unrecoverable failures bubble to root
+6. **Checkpoint resume** — progress is persisted; restarting the gateway resumes from the last checkpoint
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/plantask <goal>` | Submit a complex goal for hierarchical planning |
+| `/taskstatus` | Show current TaskTree progress |
+| `/taskcancel` | Cancel the running TaskTree task |
+
+### Memory Integration
+
+TaskTree writes node summaries to **AgeMem MemoryStore** after each completed node. Failed nodes trigger a MemoryRetriever lookup to find similar past failures and tighten the retry budget (N=10, similar failures reduce allowed retries).
+
+### Workspace State
+
+TaskTree tracks whether the workspace was modified (`dirty`) during execution. The root node's final status reflects whether the workspace is clean or needs manual cleanup.
+
 ## 💻 CLI Reference
 
 | Command | Description |
@@ -1972,6 +2026,9 @@ These commands work inside chat channels and interactive agent sessions:
 | `/dream-restore` | List recent Dream memory versions |
 | `/dream-restore <sha>` | Restore memory to the state before a specific change |
 | `/help` | Show available in-chat commands |
+| `/plantask <goal>` | Submit a complex goal for hierarchical planning |
+| `/taskstatus` | Show TaskTree progress |
+| `/taskcancel` | Cancel the running TaskTree task |
 
 <details>
 <summary><b>Heartbeat (Periodic Tasks)</b></summary>
