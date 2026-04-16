@@ -1494,3 +1494,85 @@ async def test_tasktree_service_wires_routing_and_user_input(tmp_path: Path) -> 
     tasktree_service2._channels["feishu_chat"] = "feishu"
     # When cancel is called, it should use the correct channel
     assert tasktree_service2._channels.get("feishu_chat") == "feishu"
+
+
+@pytest.mark.asyncio
+async def test_tasktree_submit_rejects_when_busy(tmp_path: Path) -> None:
+    """When a TaskTree is already running, a new /plantask submission is rejected."""
+    from nanobot.agent.tasktree.service import TaskTreeService
+    from nanobot.agent.tasktree.tree import TaskTree
+    from nanobot.agent.tasktree.models import NodeResult
+
+    class _FakeProvider:
+        def get_default_model(self):
+            return "test-model"
+
+        async def chat(self, messages, model=None, max_tokens=None, **kwargs):
+            class _Resp:
+                content = "ok"
+            return _Resp()
+
+    class _FakeBus:
+        def __init__(self):
+            self.outbound: list = []
+
+        async def publish_outbound(self, msg):
+            self.outbound.append(msg)
+
+    class _FakeMemoryStore:
+        async def start(self): pass
+        async def stop(self): pass
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    from nanobot.agent.context import ContextBuilder
+    from nanobot.session.manager import SessionManager
+
+    bus = _FakeBus()
+    session_manager = SessionManager(workspace)
+    context_builder = ContextBuilder(workspace, timezone="UTC")
+
+    service = TaskTreeService(
+        bus=bus,
+        provider=_FakeProvider(),
+        tools=MagicMock(),
+        context_builder=context_builder,
+        session_manager=session_manager,
+        memory_store=_FakeMemoryStore(),
+        memory_retriever=MagicMock(),
+    )
+
+    # Simulate: there is a running task (not done) for chat_1
+    # Use a mock task with done() returning False
+    class FakeTask:
+        def done(self):
+            return False
+    service._tasks["chat_1"] = FakeTask()  # not done
+
+    # Also put a fake scheduler with a tree so we can check the busy goal
+    class FakeScheduler:
+        def get_tree(self):
+            t = TaskTree()
+            t.create_root(goal="开发大型电商系统")
+            t.mark_done(t.root_id, NodeResult(node_id=t.root_id, summary="done"))
+            return t
+    service._schedulers["chat_1"] = FakeScheduler()
+
+    # Submit a new task while busy
+    class FakeInbound:
+        sender_id = "u1"
+        chat_id = "chat_1"
+        channel = "cli"
+        content = "新的任务 B"
+        metadata = {}
+
+    await service.submit(FakeInbound())
+
+    # Should have published a rejection message
+    assert len(bus.outbound) == 1
+    msg = bus.outbound[0]
+    assert "TaskTree 正忙" in msg.content
+    assert "开发大型电商系统" in msg.content
+    assert msg.metadata.get("_tasktree_busy") is True
+    # The running task should NOT have been cancelled
+    assert "chat_1" in service._tasks

@@ -91,11 +91,33 @@ class TaskTreeService:
         """Submit a task for execution. Non-blocking — runs in background.
 
         Checks for a saved tree checkpoint and resumes if found.
+        Rejects new submissions if a task is already running.
         """
         chat_id = inbound.chat_id
-        # Cancel any existing task for this chat_id
-        if chat_id in self._tasks:
-            await self.cancel(chat_id)
+
+        # Reject if a task is already running for this chat_id
+        if chat_id in self._tasks and not self._tasks[chat_id].done():
+            scheduler = self._schedulers.get(chat_id)
+            busy_goal = ""
+            if scheduler is not None:
+                tree = scheduler.get_tree()
+                if tree and tree.root_id:
+                    busy_goal = tree.nodes[tree.root_id].goal
+                    if len(busy_goal) > 60:
+                        busy_goal = busy_goal[:57] + "..."
+            busy_msg = (
+                f"⚠️ TaskTree 正忙，无法接收新任务。\n"
+                f"当前任务：{busy_goal or '(未知)'}\n"
+                f"请等待当前任务结束，或发送 /taskcancel 取消后重试。"
+            )
+            await self.bus.publish_outbound(OutboundMessage(
+                channel=inbound.channel,
+                chat_id=chat_id,
+                content=busy_msg,
+                metadata={"_tasktree_busy": True},
+            ))
+            logger.info("TaskTree: rejected new submit, chat_id={} busy with {}", chat_id, busy_goal[:40])
+            return
 
         session_key = f"tasktree:{chat_id}"
         session_cb = SessionPersistenceCallback(
@@ -321,7 +343,8 @@ If the goal is already clear and specific, simply summarize it concisely."""
 
         try:
             root_result = await scheduler.run(task_goal, resume_tree=saved_tree)
-            return self._build_response(root_result, inbound)
+            tree = scheduler.get_tree()
+            return self._build_response(root_result, tree, inbound)
         except asyncio.CancelledError:
             logger.info("TaskTree cancelled mid-execution for chat_id={}", inbound.chat_id)
             return None
@@ -418,40 +441,105 @@ If the goal is already clear and specific, simply summarize it concisely."""
 
     def _format_tree_status(self, tree: TaskTree) -> str:
         """Format the current tree state for /taskstatus."""
-        if tree.root_id is None:
-            return "TaskTree 未初始化"
+        return self._render_tree_diagram(tree, "📋 TaskTree 当前状态:")
 
-        lines = ["📋 TaskTree 当前状态:"]
-        for node_id, node in tree.nodes.items():
-            depth = "  " * node.depth
+    def _render_tree_diagram(
+        self,
+        tree: TaskTree,
+        title: str = "📋 TaskTree 执行结果:",
+    ) -> str:
+        """Render the full tree as an ASCII diagram with status per node.
+
+        Structure:
+        📋 TaskTree 执行结果:
+        └── ✅ root: 开发电商小程序 demo
+            ├── ✅ node_1: 设计数据库模型
+            │   └── ✅ node_1_1: 设计 User/Product/Order 模型
+            └── ✅ node_2: 实现后端 API
+                ├── ✅ node_2_1: 实现用户注册接口
+                └── ❌ node_2_2: 实现商品列表接口 (失败原因...)
+        """
+        if tree.root_id is None:
+            return title + "\n  (空树)"
+
+        lines = [title]
+
+        def node_icon(node) -> str:
             if node.status.value == "done":
-                icon = "✅"
+                return "✅"
             elif node.status.value == "failed":
-                icon = "❌"
+                return "❌"
             elif node.status.value == "blocked":
-                icon = "🚫"
+                return "🚫"
             elif node.status.value == "running":
-                icon = "🔄"
-            else:
-                icon = "⏳"
-            lines.append(f"  {icon} {depth}{node.id}: {node.goal[:50]}")
+                return "🔄"
+            return "⏳"
+
+        def render_node(node_id: str, prefix: str, is_last: bool) -> None:
+            node = tree.nodes[node_id]
+            icon = node_icon(node)
+            # Connector: "└──" for last child, "├──" for others
+            connector = "└── " if is_last else "├── "
+            # Blank prefix continuation for parent connector lines
+            blank = prefix.replace("└── ", "    ").replace("├── ", "│   ")
+
+            goal_text = node.goal.replace("\n", " ").strip()
+            if len(goal_text) > 60:
+                goal_text = goal_text[:57] + "..."
+
+            lines.append(f"{prefix}{connector}{icon} {node.id}: {goal_text}")
+
+            # Failure reason
+            if node.status.value == "failed" and node.failure:
+                reason = node.failure.summary.replace("\n", " ").strip()
+                if len(reason) > 60:
+                    reason = reason[:57] + "..."
+                lines.append(f"{blank}    └─ ❗ {reason}")
+
+            # Children
+            child_count = len(node.children)
+            for i, child_id in enumerate(node.children):
+                is_last_child = (i == child_count - 1)
+                child_prefix = blank + ("    " if is_last_child else "│   ")
+                render_node(child_id, child_prefix, is_last_child)
+
+        root = tree.nodes[tree.root_id]
+        root_goal_text = root.goal.replace("\n", " ").strip()
+        if len(root_goal_text) > 60:
+            root_goal_text = root_goal_text[:57] + "..."
+        lines.append(f"└── {node_icon(root)} {root.id}: {root_goal_text}")
+
+        # Render root's children recursively with 4-space indent
+        for i, child_id in enumerate(root.children):
+            is_last = (i == len(root.children) - 1)
+            render_node(child_id, "    ", is_last)
+
         return "\n".join(lines)
 
     def _build_response(
         self,
         root_result: NodeResult,
+        tree: TaskTree,
         inbound: InboundMessage,
     ) -> OutboundMessage:
         """Build an OutboundMessage from the root result."""
+        # Tree diagram
+        tree_diagram = self._render_tree_diagram(tree)
+
+        # Summary + artifacts
         content = root_result.summary or "Task completed."
         if root_result.artifacts:
             lines = ["[Results]"]
             for a in root_result.artifacts:
                 lines.append(f"- [{a.type}] {a.path or ''}: {a.description}")
             content += "\n\n" + "\n".join(lines)
+
+        # Combine: tree diagram first, then summary
+        full_content = f"{tree_diagram}\n\n{content}"
+
         return OutboundMessage(
             channel=inbound.channel,
             chat_id=inbound.chat_id,
-            content=content,
+            content=full_content,
             metadata={**(inbound.metadata or {}), "_tasktree": True},
         )
