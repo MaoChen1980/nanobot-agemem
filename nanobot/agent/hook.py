@@ -62,6 +62,64 @@ class AgentHook:
         return content
 
 
+_CODE_QUESTION_KEYWORDS = (
+    "代码", "怎么实现", "哪里", "哪个文件", "函数", "逻辑",
+    "怎么写", "实现原理", "源代码", "source code", "file:", "line ",
+    "怎么做的", "哪个函数", "什么逻辑", "在哪", "代码在哪",
+)
+
+
+class SourceTracingHook(AgentHook):
+    """Enforces answer sourcing: code questions must use tools with file:line citations.
+
+    At on_iteration_end, checks if:
+    1. The last user message asked a code question
+    2. This iteration made any tool calls
+    3. The final content has source citations
+
+    If a code question was answered without tools, injects a constraint message
+    requiring the agent to use Read/grep to find the actual code.
+    """
+
+    def __init__(self, require_citations: bool = True) -> None:
+        super().__init__()
+        self._require_citations = require_citations
+
+    def on_iteration_end(self, context: AgentHookContext) -> str | None:
+        # Only check when we have a final content (end of response turn)
+        if context.final_content is None:
+            return None
+
+        # Find the last user message to check if it was a code question
+        last_user_msg = None
+        for msg in reversed(context.messages):
+            if msg.get("role") == "user":
+                last_user_msg = msg.get("content", "")
+                break
+
+        if not last_user_msg:
+            return None
+
+        is_code_question = any(kw in last_user_msg for kw in _CODE_QUESTION_KEYWORDS)
+
+        if not is_code_question:
+            return None
+
+        # Code question detected — check if tools were used
+        has_tool_calls = bool(context.tool_calls)
+        has_citations = "file:" in context.final_content or "line " in context.final_content
+
+        if has_tool_calls or has_citations:
+            return None
+
+        # No tools used and no citations → agent answered a code question from memory
+        return (
+            "[答案溯源检查] 你回答了一个代码相关的问题，但没有调用任何工具，也没有引用任何 file:line。\n"
+            "请重新回答：必须先用 Read/grep 等工具查阅实际代码，答案必须包含具体的 file:line 引用。\n"
+            "不要凭记忆回答，不要编造代码内容。"
+        )
+
+
 class CompositeHook(AgentHook):
     """Fan-out hook that delegates to an ordered list of hooks.
 

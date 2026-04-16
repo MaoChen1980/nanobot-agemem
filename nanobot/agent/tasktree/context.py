@@ -52,10 +52,19 @@ def build_node_context(
     # 1. Build the system prompt via ContextBuilder
     system_prompt = context_builder.build_system_prompt(channel=channel)
 
-    # 2. Build the node task block (injected into user message)
+    # 2. Root node: retrieve relevant memories
+    if node.parent_id is None:
+        retriever = context_builder._get_retriever()
+        if retriever:
+            memories = retriever.retrieve(node.goal, top_k=3)
+            if memories:
+                memory_context = "\n".join([f"- {r.entry.content}" for r in memories])
+                system_prompt += f"\n\n[Relevant Experience]\n{memory_context}\n[/Relevant Experience]"
+
+    # 3. Build the node task block (injected into user message)
     task_block = _build_task_block(tree, node, parent_result, constraints)
 
-    # 3. Assemble messages
+    # 4. Assemble messages
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
 
     if history:

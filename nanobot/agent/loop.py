@@ -18,7 +18,7 @@ from loguru import logger
 
 from nanobot.agent.autocompact import AutoCompact
 from nanobot.agent.context import ContextBuilder
-from nanobot.agent.hook import AgentHook, AgentHookContext, CompositeHook
+from nanobot.agent.hook import AgentHook, AgentHookContext, CompositeHook, SourceTracingHook
 from nanobot.agent.hooks.memory_hook import MemoryHook
 from nanobot.agent.memory import Consolidator, Dream
 from nanobot.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
@@ -216,6 +216,9 @@ class AgentLoop:
                 auto_add_enabled=cfg.auto_add_enabled,
             )
             self._extra_hooks.append(self._memory_hook)
+
+        # Source tracing: enforce tool use + citations for code-related questions
+        self._extra_hooks.append(SourceTracingHook())
 
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills, memory_config=memory_config)
         self.sessions = session_manager or SessionManager(workspace)
