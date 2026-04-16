@@ -692,7 +692,7 @@ class AgentLoop:
                 current_message=msg.content, channel=channel, chat_id=chat_id,
                 session_summary=pending,
                 current_role=current_role,
-                memory_context=self.context.get_memory_context_for_query(msg.content),
+                memory_context=None,  # Disabled: auto memory injection misleads LLM. Ask "我记得..." to re-enable.
             )
             final_content, _, all_msgs, _, _ = await self._run_agent_loop(
                 messages, session=session, channel=channel, chat_id=chat_id,
