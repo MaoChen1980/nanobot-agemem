@@ -35,7 +35,6 @@ from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.update_context import UpdateContextTool
 from nanobot.agent.tools.list_subagents import ListSubagentsTool
-from nanobot.agent.tools.tasktree_tools import PlantaskTool, TaskStatusTool, TaskCancelTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
 from nanobot.agent.tools.memory import (
     AddMemoryTool,
@@ -321,10 +320,8 @@ class AgentLoop:
         self.tools.register(SpawnTool(manager=self.subagents))
         self.tools.register(UpdateContextTool(manager=self.subagents))
         self.tools.register(ListSubagentsTool(manager=self.subagents))
-        if self._tasktree_service:
-            self.tools.register(PlantaskTool(tasktree_service=self._tasktree_service))
-            self.tools.register(TaskStatusTool(tasktree_service=self._tasktree_service))
-            self.tools.register(TaskCancelTool(tasktree_service=self._tasktree_service))
+        # TaskTree commands are exposed as /plantask, /taskstatus, /taskcancel
+        # (priority commands that bypass the LLM). They are NOT exposed as LLM tools.
         if self.cron_service:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
