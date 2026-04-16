@@ -62,23 +62,28 @@ class AgentHook:
         return content
 
 
-_CODE_QUESTION_KEYWORDS = (
-    # 代码类
-    "代码", "怎么实现", "函数", "逻辑", "实现原理",
-    "源代码", "source code", "file:", "line ",
-    # 事实归属类（谁/哪个/是不是/创建/生成 — 高风险编造）
-    "是谁", "是不是", "是不是在", "是不是由", "是不是nanobot",
-    "写的吗", "是否", "真的吗",
-    "哪个", "哪个文件", "哪个版本", "哪个功能",
-    "生成", "创建", "来源", "来自",
-    "什么时候", "是谁生成", "谁创建",
+_FACTUAL_QUESTION_KEYWORDS = (
+    # 问句模式（什么/是谁/在哪里/有没有 — 可能是文件里能查到的事实）
+    "是什么", "在哪里", "是谁", "哪个", "有什么", "有没有",
+    "是不是", "是否", "是否存在", "什么时候", "为什么",
+    "写的吗", "真的吗", "来自", "来源",
+    # 代码/技术实现类
+    "代码", "函数", "逻辑", "实现", "原理", "源代码",
+    "file:", "line ", "source code",
+    # 文件/目录查询
+    "文件", "目录", "内容", "查看", "这个文件", "哪个文件",
+    ".md", ".json", ".yaml", ".toml", ".py", ".js",
+    "memory/", "nanobot/", "skills/", "config/", ".md 是",
+    # 归属/生成/创建
+    "生成", "创建", "是谁生成", "谁创建", "来自哪里",
 )
 
 
 class SourceTracingHook(AgentHook):
-    """Enforces tool use for code questions to prevent fabrication.
+    """Enforces tool use for verifiable factual questions.
 
-    Code-related questions are high-risk for hallucination.
+    Any question that could be answered by reading a file (code, config,
+    docs, memory) should be verified with tools — not answered from memory.
     If no tools were called and no source citations exist, trigger a retry
     or rewrite the response to express uncertainty.
     """
@@ -88,10 +93,10 @@ class SourceTracingHook(AgentHook):
         self._require_citations = require_citations
         self._triggered: bool = False
 
-    def _is_code_question(self, text: str) -> bool:
+    def _is_factual_question(self, text: str) -> bool:
         if not text:
             return False
-        return any(kw in text for kw in _CODE_QUESTION_KEYWORDS)
+        return any(kw in text for kw in _FACTUAL_QUESTION_KEYWORDS)
 
     def _has_citation(self, text: str | None) -> bool:
         if not text:
@@ -106,7 +111,7 @@ class SourceTracingHook(AgentHook):
             if msg.get("role") == "user":
                 last_user_msg = msg.get("content", "")
                 break
-        if not self._is_code_question(last_user_msg):
+        if not self._is_factual_question(last_user_msg):
             return False
         return not bool(context.tool_calls) and not self._has_citation(context.final_content)
 
