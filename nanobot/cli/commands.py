@@ -671,12 +671,6 @@ def gateway(
 
     # Build TaskTreeService with routing
     from nanobot.agent.context import ContextBuilder
-    context_builder = ContextBuilder(
-        config.workspace_path,
-        timezone=config.agents.defaults.timezone,
-        disabled_skills=config.agents.defaults.disabled_skills,
-        memory_config=config.agents.defaults.memory,
-    )
     from nanobot.agent.agemem.retriever import MemoryRetriever
     from nanobot.agent.agemem.store import MemoryStoreV2
     memory_store = MemoryStoreV2(config.workspace_path)
@@ -684,15 +678,32 @@ def gateway(
     from nanobot.agent.tools.registry import ToolRegistry
     tools = ToolRegistry()
 
+    # ContextBuilder for TaskTreeService (no tasktree fn needed)
+    context_builder_tt = ContextBuilder(
+        config.workspace_path,
+        timezone=config.agents.defaults.timezone,
+        disabled_skills=config.agents.defaults.disabled_skills,
+        memory_config=config.agents.defaults.memory,
+    )
+
     tasktree_service = TaskTreeService(
         bus=bus,
         provider=provider,
         tools=tools,
-        context_builder=context_builder,
+        context_builder=context_builder_tt,
         session_manager=session_manager,
         memory_store=memory_store,
         memory_retriever=memory_retriever,
         model=config.agents.defaults.model,
+    )
+
+    # ContextBuilder for AgentLoop — includes TaskTree status injection
+    context_builder = ContextBuilder(
+        config.workspace_path,
+        timezone=config.agents.defaults.timezone,
+        disabled_skills=config.agents.defaults.disabled_skills,
+        memory_config=config.agents.defaults.memory,
+        tasktree_status_fn=tasktree_service.get_status_str,
     )
 
     def _tasktree_predicate(msg: Any) -> bool:

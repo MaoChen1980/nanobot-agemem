@@ -209,6 +209,30 @@ class TaskTreeService:
                 lines.append(f"  {content}")
         return "\n".join(lines)
 
+    def get_status_str(self, chat_id: str) -> str | None:
+        """Return a one-line status string for ContextBuilder injection, or None if idle.
+
+        This is a sync method safe to call from the agent context hot path.
+        """
+        task = self._tasks.get(chat_id)
+        if task is None:
+            return None
+        if task.done():
+            return None
+        scheduler = self._schedulers.get(chat_id)
+        if scheduler is None:
+            return None
+        tree = scheduler.get_tree()
+        if tree is None or tree.root_id is None:
+            return None
+        root = tree.nodes.get(tree.root_id)
+        if root is None:
+            return None
+        goal = root.goal.replace("\n", " ").strip()
+        if len(goal) > 50:
+            goal = goal[:47] + "..."
+        return f"🔄 TaskTree 进行中: {goal}"
+
     async def confirm_task(self, chat_id: str, raw_goal: str, channel: str, auto_confirm: bool = False) -> str | None:
         """Ask the user to confirm/enrich a task goal via LLM paraphrase.
 

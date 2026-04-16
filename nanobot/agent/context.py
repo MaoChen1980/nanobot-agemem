@@ -18,6 +18,7 @@ from nanobot.utils.prompt_templates import render_template
 
 if TYPE_CHECKING:
     from nanobot.config.schema import MemoryConfig
+    from collections.abc import Callable
 
 
 class ContextBuilder:
@@ -28,13 +29,14 @@ class ContextBuilder:
     _MAX_RECENT_HISTORY = 50
     _RUNTIME_CONTEXT_END = "[/Runtime Context]"
 
-    def __init__(self, workspace: Path, timezone: str | None = None, disabled_skills: list[str] | None = None, memory_config: "MemoryConfig | None" = None):
+    def __init__(self, workspace: Path, timezone: str | None = None, disabled_skills: list[str] | None = None, memory_config: "MemoryConfig | None" = None, tasktree_status_fn: "Callable[[str], str | None] | None" = None):
         self.workspace = workspace
         self.timezone = timezone
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
         self._memory_config = memory_config
         self._retriever: "MemoryRetriever | None" = None
+        self._tasktree_status_fn = tasktree_status_fn  # callable(chat_id) -> str | None
 
     def _get_retriever(self) -> "MemoryRetriever":
         """Lazily create the BM25 memory retriever."""
@@ -129,8 +131,8 @@ class ContextBuilder:
             channel=channel or "",
         )
 
-    @staticmethod
     def _build_runtime_context(
+        self,
         channel: str | None, chat_id: str | None, timezone: str | None = None,
         session_summary: str | None = None,
     ) -> str:
@@ -138,9 +140,14 @@ class ContextBuilder:
         lines = [f"Current Time: {current_time_str(timezone)}"]
         if channel and chat_id:
             lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
+        # TaskTree status from the optional status function (set by gateway)
+        if self._tasktree_status_fn and chat_id:
+            tt_status = self._tasktree_status_fn(chat_id)
+            if tt_status:
+                lines += ["", "[TaskTree Status]", tt_status]
         if session_summary:
             lines += ["", "[Resumed Session]", session_summary]
-        return ContextBuilder._RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines) + "\n" + ContextBuilder._RUNTIME_CONTEXT_END
+        return self._RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines) + "\n" + self._RUNTIME_CONTEXT_END
 
     @staticmethod
     def _merge_message_content(left: Any, right: Any) -> str | list[dict[str, Any]]:
