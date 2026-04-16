@@ -38,13 +38,20 @@ async def cmd_plantask(ctx: CommandContext) -> OutboundMessage | None:
     loop = ctx.loop
     msg = ctx.msg
     raw = ctx.raw
-    if not raw.lower().startswith("/plantask"):
+    raw_lower = raw.lower()
+    # Support both /plantask and /plantask! (auto-confirm)
+    if not raw_lower.startswith("/plantask"):
         return None
-    goal = raw[len("/plantask"):].strip()
+    auto_confirm = raw_lower.startswith("/plantask!")
+    # Extract goal, stripping command prefix and leading whitespace
+    cmd_len = len("/plantask!")
+    if not auto_confirm:
+        cmd_len = len("/plantask")
+    goal = raw[cmd_len:].strip()
     if not goal:
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id,
-            content="Usage: /plantask <goal>",
+            content="Usage: /plantask <goal>  or  /plantask! <goal> (auto-confirm)",
             metadata=dict(msg.metadata or {}),
         )
     tasktree = getattr(loop, "_tasktree_service", None)
@@ -55,17 +62,22 @@ async def cmd_plantask(ctx: CommandContext) -> OutboundMessage | None:
             metadata=dict(msg.metadata or {}),
         )
     from nanobot.bus.events import InboundMessage
+    metadata = dict(msg.metadata or {})
+    if auto_confirm:
+        metadata["_tasktree_auto_confirm"] = True
     inbound = InboundMessage(
         channel=msg.channel,
         sender_id=msg.sender_id,
         chat_id=msg.chat_id,
         content=goal,
         media=[],
+        metadata=metadata,
     )
     await tasktree.submit(inbound)
+    prefix = "✅" if not auto_confirm else "🚀"
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id,
-        content=f"✅ TaskTree started: {goal[:80]}{'...' if len(goal) > 80 else ''}",
+        content=f"{prefix} TaskTree started (auto-confirm): {goal[:80]}{'...' if len(goal) > 80 else ''}",
         metadata=dict(msg.metadata or {}),
     )
 
@@ -418,6 +430,7 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/stop", cmd_stop)
     router.priority("/restart", cmd_restart)
     router.priority("/status", cmd_status)
+    router.priority_prefix("/plantask!", cmd_plantask)
     router.priority_prefix("/plantask", cmd_plantask)
     router.priority("/taskstatus", cmd_taskstatus)
     router.priority("/taskcancel", cmd_taskcancel)
