@@ -3,6 +3,7 @@
 import base64
 import mimetypes
 import platform
+from datetime import datetime
 from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any
@@ -100,9 +101,17 @@ class ContextBuilder:
             parts.append(f"# 记忆参考\n\n{memory_context}")
         else:
             # Legacy: full MEMORY.md injection (backward compat)
-            memory = self.memory.get_memory_context()
-            if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
-                parts.append(f"# 记忆参考（仅供参考，可能有偏差）\n\n{memory}")
+            memory_content = self.memory.read_memory()
+            if memory_content and not self._is_template_content(memory_content, "memory/MEMORY.md"):
+                # Annotate with file modification time so LLM can judge freshness
+                mtime_ts = ""
+                try:
+                    mtime = self.memory.memory_file.stat().st_mtime
+                    mtime_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+                    mtime_ts = f"\n\n> MEMORY.md 最后更新: {mtime_str}（内容可能已过期，请结合上方 AgeMem 记忆参考判断）"
+                except OSError:
+                    pass
+                parts.append(f"# 记忆参考（仅供参考，可能有偏差）{mtime_ts}\n\n{memory_content}")
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
