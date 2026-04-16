@@ -67,7 +67,8 @@ class ContextBuilder:
             ts = e.created_at[:16] if e.created_at else ""
             src = "来源: nanobot记忆"
             tags = f"[tags={', '.join(e.tags)}]" if e.tags else ""
-            lines.append(f"- {src} {ts} {tags} {e.content[:150]}{'...' if len(e.content) > 150 else ''}")
+            freshness = f" {se.freshness_label}" if se.freshness_label else ""
+            lines.append(f"- {src} {ts}{freshness} {tags} {e.content[:150]}{'...' if len(e.content) > 150 else ''}")
 
         return (
             "[记忆参考 — 仅供参考，可能有偏差，不保证准确]\n"

@@ -8,6 +8,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import numpy as np
@@ -16,11 +17,20 @@ from nanobot.agent.agemem.entry import MemoryEntry
 from nanobot.agent.agemem.store import MemoryStoreV2
 
 
+# Freshness halflife in days — entries lose half their freshness weight each halflife
+_FRESHNESS_HALFLIFE_DAYS = 7.0
+# Scoring weights: relevance (BM25), importance, freshness
+_W_BM25 = 0.60
+_W_IMPORTANCE = 0.25
+_W_FRESHNESS = 0.15
+
+
 @dataclass
 class ScoredEntry:
-    """A memory entry with its relevance score."""
+    """A memory entry with its relevance score and freshness metadata."""
     entry: MemoryEntry
     score: float
+    freshness_label: str = ""  # e.g. "[fresh]", "[aging]", "[stale]"
 
 
 class MemoryRetriever:
@@ -34,9 +44,9 @@ class MemoryRetriever:
         self._store = store
 
     def retrieve(self, query: str, top_k: int = 5) -> list[ScoredEntry]:
-        """Find memories most relevant to the query using BM25 scoring.
+        """Find memories most relevant to the query using BM25 + importance + freshness scoring.
 
-        Returns top-k entries sorted by relevance score (descending).
+        Returns top-k entries sorted by combined relevance score (descending).
         """
         entries = self._store.get_all()
         if not entries:
@@ -45,7 +55,10 @@ class MemoryRetriever:
         query_terms = self._tokenize(query)
         if not query_terms:
             # No query terms: return top by importance
-            return [ScoredEntry(e, e.importance) for e in entries[:top_k]]
+            return [
+                ScoredEntry(e, e.importance, self._freshness_label(e))
+                for e in entries[:top_k]
+            ]
 
         # Build BM25 scores
         scored = []
@@ -55,13 +68,50 @@ class MemoryRetriever:
             doc_terms = self._tokenize(entry.content)
             if not doc_terms:
                 continue
-            score = self._bm25_score(query_terms, doc_terms, avg_dl, len(entries))
-            # Combine BM25 with importance as a tiebreaker
-            combined = 0.7 * score + 0.3 * entry.importance
-            scored.append(ScoredEntry(entry, combined))
+            bm25 = self._bm25_score(query_terms, doc_terms, avg_dl, len(entries))
+            freshness = self._freshness_score(entry)
+            # Normalize importance to [0, 1]
+            importance = max(0.0, min(1.0, entry.importance))
+            combined = _W_BM25 * bm25 + _W_IMPORTANCE * importance + _W_FRESHNESS * freshness
+            scored.append(ScoredEntry(entry, combined, self._freshness_label(entry)))
 
         scored.sort(key=lambda x: x.score, reverse=True)
         return scored[:top_k]
+
+    # -- freshness scoring -----------------------------------------------------
+
+    def _freshness_score(self, entry: MemoryEntry) -> float:
+        """Compute freshness score via exponential decay from created_at.
+
+        Score = 2^(-age_days / halflife), ranging from 1.0 (just created)
+        to ~0 (very old). Uses entry.created_at ISO timestamp.
+        """
+        try:
+            created = datetime.fromisoformat(entry.created_at)
+        except (ValueError, TypeError):
+            return 0.5  # Default mid-level for unparseable timestamps
+        age_days = (datetime.now() - created).total_seconds() / 86400.0
+        if age_days < 0:
+            age_days = 0  # Future-dated entries treated as fresh
+        return 2.0 ** (-age_days / _FRESHNESS_HALFLIFE_DAYS)
+
+    @staticmethod
+    def _freshness_label(entry: MemoryEntry) -> str:
+        """Return a human-readable freshness label for an entry."""
+        try:
+            created = datetime.fromisoformat(entry.created_at)
+        except (ValueError, TypeError):
+            return "[?]"
+        age_days = (datetime.now() - created).total_seconds() / 86400.0
+        if age_days < 1:
+            return "[fresh]"
+        if age_days < 3:
+            return ""
+        if age_days < 7:
+            return "[aging]"
+        if age_days < 14:
+            return "[stale?]"
+        return "[stale!!]"
 
     def summary(self, messages: list[dict[str, Any]], max_length: int = 500) -> str:
         """Summarize a list of session messages into a concise memory string.
