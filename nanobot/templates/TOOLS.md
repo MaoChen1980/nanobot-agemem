@@ -34,3 +34,13 @@ This file documents non-obvious constraints and usage patterns.
 ## cron — Scheduled Reminders
 
 - Please refer to cron skill for usage.
+
+## spawn — Subagent Background Tasks
+
+- Use `spawn` for complex or time-consuming tasks that can run independently
+- `spawn` returns a structured result with `task_id` (save this for later)
+- Use `list_subagents()` to see all running subagents and their task_ids before updating
+- Use `update_context(task_id, context)` to push updates to a running subagent when new information becomes available
+- The subagent will receive your update as a new message and can adjust its plan accordingly
+- Always check if a subagent is already running before spawning a duplicate task
+

@@ -68,6 +68,24 @@ class SubagentManager:
         self.runner = AgentRunner(provider)
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+        self._context_queues: dict[str, asyncio.Queue[str]] = {}  # task_id -> update queue
+        self._subagent_info: dict[str, dict[str, str]] = {}  # task_id -> {label, task, session_key}
+
+    def _make_injection_callback(self, task_id: str):
+        """Build an injection_callback that drains _context_queues[task_id]."""
+        async def _drain() -> list[dict[str, Any]]:
+            queue = self._context_queues.get(task_id)
+            if queue is None:
+                return []
+            items: list[dict[str, Any]] = []
+            while True:
+                try:
+                    ctx = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                items.append({"role": "user", "content": ctx})
+            return items
+        return _drain
 
     async def spawn(
         self,
@@ -89,8 +107,21 @@ class SubagentManager:
         if session_key:
             self._session_tasks.setdefault(session_key, set()).add(task_id)
 
+        # Per-task context queue for update_context injection
+        task_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._context_queues[task_id] = task_queue
+
+        # Store subagent info for list_subagents
+        self._subagent_info[task_id] = {
+            "label": display_label,
+            "task": task,
+            "session_key": session_key or "unknown",
+        }
+
         def _cleanup(_: asyncio.Task) -> None:
             self._running_tasks.pop(task_id, None)
+            self._context_queues.pop(task_id, None)
+            self._subagent_info.pop(task_id, None)
             if session_key and (ids := self._session_tasks.get(session_key)):
                 ids.discard(task_id)
                 if not ids:
@@ -99,7 +130,22 @@ class SubagentManager:
         bg_task.add_done_callback(_cleanup)
 
         logger.info("Spawned subagent [{}]: {}", task_id, display_label)
-        return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
+        return {
+            "task_id": task_id,
+            "label": display_label,
+            "message": f"Subagent [{display_label}] started. I'll notify you when it completes.",
+        }
+
+    async def update_context(self, task_id: str, context: str) -> bool:
+        """Push contextual update to a running subagent. Returns True if delivered."""
+        queue = self._context_queues.get(task_id)
+        if queue is None:
+            return False
+        try:
+            queue.put_nowait(context)
+            return True
+        except asyncio.QueueFull:
+            return False
 
     async def _run_subagent(
         self,
@@ -149,6 +195,7 @@ class SubagentManager:
                 max_iterations_message="Task completed but no final response was generated.",
                 error_message=None,
                 fail_on_tool_error=True,
+                injection_callback=self._make_injection_callback(task_id),
             ))
             if result.stop_reason == "tool_error":
                 await self._announce_result(
@@ -270,3 +317,18 @@ class SubagentManager:
             1 for tid in tids
             if tid in self._running_tasks and not self._running_tasks[tid].done()
         )
+
+    def list_subagents(self, session_key: str | None = None) -> list[dict[str, str]]:
+        """Return running subagent info: task_id, label, task summary, session_key. Used by LLM to pick which to update."""
+        result: list[dict[str, str]] = []
+        task_ids = self._session_tasks.get(session_key, set()) if session_key else set(self._running_tasks.keys())
+        for tid in task_ids:
+            if tid in self._running_tasks and not self._running_tasks[tid].done():
+                info = self._subagent_info.get(tid, {})
+                result.append({
+                    "task_id": tid,
+                    "label": info.get("label", "unknown"),
+                    "task": info.get("task", "")[:80] + ("..." if len(info.get("task", "")) > 80 else ""),
+                    "session_key": info.get("session_key", "unknown"),
+                })
+        return result
