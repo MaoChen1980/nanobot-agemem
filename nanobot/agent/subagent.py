@@ -284,7 +284,7 @@ class SubagentManager:
         from nanobot.agent.context import ContextBuilder
         from nanobot.agent.skills import SkillsLoader
 
-        time_ctx = ContextBuilder._build_runtime_context(None, None)
+        time_ctx = ContextBuilder(self.workspace)._build_runtime_context(None, None)
         skills_summary = SkillsLoader(
             self.workspace,
             disabled_skills=self.disabled_skills,

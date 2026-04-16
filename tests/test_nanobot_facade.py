@@ -83,11 +83,12 @@ async def test_run_with_hooks(tmp_path):
         channel="cli", chat_id="direct", content="done"
     )
     bot._loop.process_direct = AsyncMock(return_value=mock_response)
+    original_hooks = bot._loop._extra_hooks
 
     result = await bot.run("hi", hooks=[TestHook()])
 
     assert result.content == "done"
-    assert bot._loop._extra_hooks == []
+    assert bot._loop._extra_hooks is original_hooks
 
 
 @pytest.mark.asyncio

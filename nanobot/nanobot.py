@@ -85,12 +85,8 @@ class Nanobot:
             disabled_skills=defaults.disabled_skills,
             memory_config=defaults.memory,
         )
-        session_manager = config.session_manager or None
-
-        # Lazily import SessionManager
-        if session_manager is None:
-            from nanobot.session.manager import SessionManager
-            session_manager = SessionManager(workspace_path)
+        from nanobot.session.manager import SessionManager
+        session_manager = SessionManager(workspace_path)
 
         # Build TaskTreeService
         from nanobot.agent.tools.registry import ToolRegistry

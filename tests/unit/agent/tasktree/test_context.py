@@ -25,12 +25,15 @@ class DummyContextBuilder:
     def build_system_prompt(self, channel=None):
         return "You are a helpful assistant."
 
-    def _build_runtime_context(self, channel, chat_id, timezone):
+    def _build_runtime_context(self, channel, chat_id, timezone=None, session_summary=None):
         return "[runtime context placeholder]"
 
     @property
     def timezone(self):
         return "UTC"
+
+    def _get_retriever(self):
+        return None
 
 
 def _child_id(tree: TaskTree, parent_id: str, index: int) -> str:
