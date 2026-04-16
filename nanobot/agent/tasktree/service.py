@@ -72,6 +72,8 @@ class TaskTreeService:
         self._pending_confirms: dict[str, asyncio.Event] = {}
         # chat_id → channel (for routing outbound messages to correct channel)
         self._channels: dict[str, str] = {}
+        # chat_id → question text (persisted after event is consumed, cleared on task done)
+        self._waiting_questions: dict[str, str] = {}
 
     async def start(self) -> None:
         """Start the service."""
@@ -158,6 +160,7 @@ class TaskTreeService:
         # Clean up any pending input/confirm events and channel
         self._input_events.pop(chat_id, None)
         self._pending_confirms.pop(chat_id, None)
+        self._waiting_questions.pop(chat_id, None)
         self._channels.pop(chat_id, None)
         # Clear the checkpoint so the next submit starts fresh
         session_key = f"tasktree:{chat_id}"
@@ -219,6 +222,14 @@ class TaskTreeService:
             return None
         if task.done():
             return None
+
+        # If waiting for user input, show that first (more relevant)
+        if chat_id in self._waiting_questions:
+            question = self._waiting_questions[chat_id].replace("\n", " ").strip()
+            if len(question) > 60:
+                question = question[:57] + "..."
+            return f"⏸️ TaskTree 等待你的输入: {question}"
+
         scheduler = self._schedulers.get(chat_id)
         if scheduler is None:
             return None
@@ -332,6 +343,8 @@ If the goal is already clear and specific, simply summarize it concisely."""
         """
         event = asyncio.Event()
         self._input_events[chat_id] = event
+        # Persist question so agent context can show it while waiting
+        self._waiting_questions[chat_id] = question
         # Publish the question to the user on the correct channel
         await self.bus.publish_outbound(OutboundMessage(
             channel=channel,
