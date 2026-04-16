@@ -95,8 +95,11 @@ class TaskTreeService:
         """
         chat_id = inbound.chat_id
 
-        # Reject if a task is already running for this chat_id
-        if chat_id in self._tasks and not self._tasks[chat_id].done():
+        # Reject only if a task is truly RUNNING (not done) for this chat_id.
+        # A completed task allows new submissions — the old checkpoint will be
+        # overwritten naturally by the new task.
+        running_task = self._tasks.get(chat_id)
+        if running_task is not None and not running_task.done():
             scheduler = self._schedulers.get(chat_id)
             busy_goal = ""
             if scheduler is not None:
@@ -108,7 +111,7 @@ class TaskTreeService:
             busy_msg = (
                 f"⚠️ TaskTree 正忙，无法接收新任务。\n"
                 f"当前任务：{busy_goal or '(未知)'}\n"
-                f"请等待当前任务结束，或发送 /taskcancel 取消后重试。"
+                f"请等待当前任务结束，或发送 /taskcancel 取消后再试。"
             )
             await self.bus.publish_outbound(OutboundMessage(
                 channel=inbound.channel,
