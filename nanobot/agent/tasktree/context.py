@@ -52,14 +52,24 @@ def build_node_context(
     # 1. Build the system prompt via ContextBuilder
     system_prompt = context_builder.build_system_prompt(channel=channel)
 
-    # 2. Root node: retrieve relevant memories
+    # 2. Root node: retrieve relevant memories (tagged as imperfect reference)
     if node.parent_id is None:
         retriever = context_builder._get_retriever()
         if retriever:
             memories = retriever.retrieve(node.goal, top_k=3)
             if memories:
-                memory_context = "\n".join([f"- {r.entry.content}" for r in memories])
-                system_prompt += f"\n\n[Relevant Experience]\n{memory_context}\n[/Relevant Experience]"
+                lines = []
+                for r in memories:
+                    e = r.entry
+                    ts = e.timestamp[:16] if e.timestamp else ""
+                    src = f"来源: {e.source or 'nanobot记忆'}"
+                    lines.append(f"- {src} {ts}: {e.content[:150]}{'...' if len(e.content) > 150 else ''}")
+                memory_context = "\n".join(lines)
+                system_prompt += (
+                    f"\n\n[记忆参考 — 仅供参考，可能有偏差，不保证准确]\n"
+                    f"{memory_context}\n"
+                    f"[/记忆参考]"
+                )
 
     # 3. Build the node task block (injected into user message)
     task_block = _build_task_block(tree, node, parent_result, constraints)
