@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from loguru import logger
 
 from nanobot.agent.hook import AgentHook
 from nanobot.agent.loop import AgentLoop
@@ -112,7 +115,21 @@ class Nanobot:
                 or bool(metadata.get("_tasktree_task"))
             )
 
-        router.register_route("tasktree", _tasktree_predicate)
+        tasktree_queue = router.register_route("tasktree", _tasktree_predicate)
+
+        # Start TaskTreeService consumer loop — it reads from the tasktree queue
+        # and calls submit() for each matched message.
+        async def _tasktree_consumer() -> None:
+            while True:
+                try:
+                    msg = await tasktree_queue.get()
+                    await tasktree_service.submit(msg)
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    logger.exception("tasktree consumer error")
+
+        asyncio.create_task(_tasktree_consumer())
 
         # AgentLoop receives everything else (non-TaskTree messages)
         loop = AgentLoop(
