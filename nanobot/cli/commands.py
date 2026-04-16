@@ -7,6 +7,7 @@ import signal
 import sys
 from contextlib import nullcontext
 from dataclasses import dataclass, replace as dataclass_replace
+from nanobot.command.router import CommandContext
 from pathlib import Path
 from typing import Any
 
@@ -963,7 +964,7 @@ def gateway(
                     )
                     await tasktree_service.submit(inbound)
                     continue
-                ctx = agent.commands.CommandContext(
+                ctx = CommandContext(
                     msg=msg, session=None, key=msg.session_key, raw=raw, loop=agent,
                 )
                 result = await agent.commands.dispatch_priority(ctx)
@@ -1368,7 +1369,7 @@ def _run_agent_interactive(
 
             raw = msg.content.strip()
             if agent_loop.commands.is_priority(raw):
-                ctx = agent_loop.commands.CommandContext(
+                ctx = CommandContext(
                     msg=msg, session=None, key=msg.session_key, raw=raw, loop=agent_loop,
                 )
                 result = await agent_loop.commands.dispatch_priority(ctx)
