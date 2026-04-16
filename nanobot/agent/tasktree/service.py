@@ -491,8 +491,43 @@ If the goal is already clear and specific, simply summarize it concisely."""
         )
 
     def _format_tree_status(self, tree: TaskTree) -> str:
-        """Format the current tree state for /taskstatus."""
-        return self._render_tree_diagram(tree, "📋 TaskTree 当前状态:")
+        """Format a concise tree state for /taskstatus — shows root + depth-1 nodes only."""
+        if tree.root_id is None:
+            return "📋 TaskTree 当前状态:\n  (空树)"
+
+        root = tree.nodes[tree.root_id]
+
+        def node_icon(node) -> str:
+            if node.status.value == "done":
+                return "✅"
+            elif node.status.value == "failed":
+                return "❌"
+            elif node.status.value == "blocked":
+                return "🚫"
+            elif node.status.value == "running":
+                return "🔄"
+            return "⏳"
+
+        def summary(node) -> str:
+            text = node.goal.replace("\n", " ").strip()
+            return text[:50] + "..." if len(text) > 50 else text
+
+        root_icon = node_icon(root)
+        lines = [f"📋 TaskTree 当前状态:\n└── {root_icon} {summary(root)}"]
+
+        # Show depth-1 children only (not full recursive tree)
+        for child_id in root.children:
+            child = tree.nodes[child_id]
+            icon = node_icon(child)
+            lines.append(f"    ├── {icon} {summary(child)}")
+
+        # Count pending vs done
+        total = len(tree.nodes)
+        done = sum(1 for n in tree.nodes.values() if n.status.value == "done")
+        pending = sum(1 for n in tree.nodes.values() if n.status.value in ("pending", "running"))
+        lines.append(f"\n共 {total} 步 | ✅完成 {done} | ⏳进行中 {pending}")
+
+        return "\n".join(lines)
 
     def _render_tree_diagram(
         self,
