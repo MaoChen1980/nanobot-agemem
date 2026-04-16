@@ -102,6 +102,16 @@ def _build_task_block(
                 for a in parent_result.artifacts
             ]
             parts.append("[Parent Artifacts]\n" + "\n".join(artifact_lines) + "\n[/Parent Artifacts]")
+        # If parent asked user a question and got an answer, include it
+        # so this node can act on the user's input.
+        if parent_result.user_input_question:
+            parts.append(
+                f"[Parent User Input — Question]\n{parent_result.user_input_question}\n[/Parent User Input — Question]"
+            )
+            if parent_result.user_input_answer:
+                parts.append(
+                    f"[Parent User Input — Answer]\n{parent_result.user_input_answer}\n[/Parent User Input — Answer]"
+                )
 
     # --- Constraint block ---
     constraint_lines = [f"- max_depth: {constraints.max_depth}"]
