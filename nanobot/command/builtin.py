@@ -47,7 +47,7 @@ async def cmd_plantask(ctx: CommandContext) -> OutboundMessage | None:
             content="Usage: /plantask <goal>",
             metadata=dict(msg.metadata or {}),
         )
-    tasktree = getattr(loop, "tasktree_service", None)
+    tasktree = getattr(loop, "_tasktree_service", None)
     if tasktree is None:
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id,
@@ -74,7 +74,7 @@ async def cmd_taskstatus(ctx: CommandContext) -> OutboundMessage:
     """Get TaskTree task status."""
     loop = ctx.loop
     msg = ctx.msg
-    tasktree = getattr(loop, "tasktree_service", None)
+    tasktree = getattr(loop, "_tasktree_service", None)
     if tasktree is None:
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id,
@@ -92,7 +92,7 @@ async def cmd_taskcancel(ctx: CommandContext) -> OutboundMessage:
     """Cancel the running TaskTree task."""
     loop = ctx.loop
     msg = ctx.msg
-    tasktree = getattr(loop, "tasktree_service", None)
+    tasktree = getattr(loop, "_tasktree_service", None)
     if tasktree is None:
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id,
