@@ -21,7 +21,7 @@
 
 ## 📢 News
 
-- **2026-04-16** 🌳 **TaskTree** — hierarchical planning with depth-first execution, automatic task decomposition, replan on failure, and verification. Try `/plantask <goal>` for complex multi-step tasks.
+- **2026-04-16** 🌳 **TaskTree v2** — complete rewrite with tree diagram output on completion, agent context awareness (the agent knows when TaskTree is running or waiting for input), multi-channel routing, user input injection via structured JSON, and busy rejection for concurrent submits. Try `/plantask <goal>` for complex multi-step tasks.
 - **2026-04-14** 🚀 Released **v0.1.5.post1** — Dream skill discovery, mid-turn follow-up injection, WebSocket channel, and deeper channel integrations. Please see [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.5.post1) for details.
 - **2026-04-13** 🛡️ Agent turn hardened — user messages persisted early, auto-compact skips active tasks.
 - **2026-04-12** 🔒 Lark global domain support, Dream learns discovered skills, shell sandbox tightened.
@@ -1940,6 +1940,12 @@ Both systems coexist. Dream stores slow-changing knowledge; AgeMem handles fast-
 
 TaskTree upgrades nanobot's flat single-layer ReAct loop into a **hierarchical task decomposition engine**. For complex, multi-step goals, TaskTree breaks them into a tree of subtasks, executes them depth-first, replans on failure, and verifies each result — all autonomously.
 
+### Design Principles
+
+- **Context isolation** — TaskTree runs in an independent session from regular chat. The agent's regular context is never polluted with task decomposition details. When TaskTree is running, the agent sees only a single line summary (`🔄 TaskTree 进行中: ...` or `⏸️ TaskTree 等待你的输入: ...`) in its runtime context.
+- **Task-oriented** — each node sees only its own goal, parent result, and necessary user input. No sibling context, no irrelevant history.
+- **Necessary and sufficient context** — nodes receive Root Goal, Parent Task, Parent Result + Artifacts, User Q&A (if any), and Constraints. Nothing more.
+
 ### When to Use `/plantask`
 
 Use the regular agent for simple, single-turn tasks. Use `/plantask` when:
@@ -1951,38 +1957,83 @@ Use the regular agent for simple, single-turn tasks. Use `/plantask` when:
 ### How It Works
 
 ```
-User: /plantask Build a web scraper that crawls GitHub trending
+User: /plantask 开发一个 GitHub Trending 爬虫
        ↓
-TaskTree Root Node (decomposition)
+TaskTree LLM paraphrase → 用户确认
        ↓
-[Subtask 1] → [Subtask 1.1] → ... (depth-first)
-[Subtask 2]
-...
+Root Node (decomposition)
        ↓
-Verification per node → retry or replan if failed
-       ↓
-Final result delivered to user
+📋 TaskTree 执行结果:
+└── ✅ root: 开发一个 GitHub Trending 爬虫
+    ├── ✅ root.0: 设计爬虫架构
+    │   └── ✅ root.0.0: 实现 GitHub API 请求模块
+    └── ✅ root.1: 实现数据存储
+        ├── ✅ root.1.0: 实现 SQLite 存储
+        └── ❌ root.1.1: 实现缓存层 (超时)
 ```
 
 **Execution flow:**
-1. **LLM paraphrase + confirmation** — TaskTree rephrases your goal and asks for confirmation before starting
-2. **Depth-first execution** — picks the deepest pending node, executes it, bubbles up on completion
-3. **Verification** — each node result is verified; failed nodes trigger replan or bubble-up
-4. **MAX_CHILDREN=10** — a parent can spawn up to 10 subtasks; beyond that the parent fails and propagates upward
-5. **Failure handling** — constraint violations mark nodes BLOCKED; execution failures spawn sibling replans; unrecoverable failures bubble to root
-6. **Checkpoint resume** — progress is persisted; restarting the gateway resumes from the last checkpoint
+1. **LLM paraphrase + confirmation** — TaskTree rephrases your goal and asks for confirmation before starting. Use `-m` flag or `/plantask` in non-interactive mode to skip confirmation.
+2. **Depth-first execution** — picks the deepest pending node, executes it, spawns children if any, bubbles up on completion
+3. **Replan on failure** — constraint violations mark nodes BLOCKED; execution failures spawn sibling replans; unrecoverable failures bubble to root
+4. **Verification** — each node result is verified; failed nodes trigger replan or bubble-up. Skipped for planning-only tasks (no artifacts generated).
+5. **MAX_CHILDREN=10** — a parent can spawn up to 10 subtasks; beyond that the parent fails and propagates upward
+6. **Checkpoint resume** — progress is persisted after every node; restarting the gateway resumes from the last checkpoint
+
+### User Input During Execution
+
+Nodes can ask for human input when necessary. The agent emits a structured request:
+
+```json
+{
+  "summary": "我已完成需求分析",
+  "artifacts": [...],
+  "user_input_request": "请选择数据库：PostgreSQL 还是 MongoDB？"
+}
+```
+
+When a node requests input:
+- TaskTree pauses and publishes the question to the user
+- The agent's regular context shows `⏸️ TaskTree 等待你的输入: 请选择数据库：PostgreSQL 还是 MongoDB？`
+- The user's answer is injected into the next iteration and passed to child nodes via `[Parent User Input — Question/Answer]` context blocks
+
+### Multi-Channel Awareness
+
+Each chat session (`chat_id`) has its own independent TaskTree. TaskTree notifications (confirmation prompts, progress, user input requests, completion results) are routed to the correct channel (Telegram, Feishu, CLI, etc.) via the `_channels` mapping.
+
+If a task is already running for a chat_id, new `/plantask` submissions are **rejected** with a friendly message showing the current task goal, instead of silently overwriting it.
 
 ### Commands
 
 | Command | Description |
 |---------|-------------|
 | `/plantask <goal>` | Submit a complex goal for hierarchical planning |
-| `/taskstatus` | Show current TaskTree progress |
-| `/taskcancel` | Cancel the running TaskTree task |
+| `nanobot agent -m "/plantask <goal>"` | Same as above, but auto-confirms (no interactive prompt) — suitable for scripts and CI |
+| `/taskstatus` | Show current TaskTree progress (full tree diagram) |
+| `/taskcancel` | Cancel the running TaskTree task and clear its checkpoint |
+
+### Architecture
+
+```
+Gateway
+├── RouterBus
+│   ├── Route: metadata._tasktree_task → TaskTreeService
+│   └── Route: /plantask priority → TaskTreeService
+│   └── Default → AgentLoop
+│
+├── AgentLoop (regular chat)
+│   └── ContextBuilder + tasktree_status_fn → sees "🔄 进行中" / "⏸️ 等待输入"
+│
+└── TaskTreeService
+    ├── Scheduler + ExecutionAgent + ConstraintAgent
+    │   └── ContextBuilder (isolated, no agent context pollution)
+    ├── Session: tasktree:{chat_id} (independent from AgentLoop session)
+    └── BusNotifierCallback → publishes progress to correct channel
+```
 
 ### Memory Integration
 
-TaskTree writes node summaries to **AgeMem MemoryStore** after each completed node. Failed nodes trigger a MemoryRetriever lookup to find similar past failures and tighten the retry budget (N=10, similar failures reduce allowed retries).
+TaskTree writes node summaries to **AgeMem MemoryStore** after each completed node. Failed nodes trigger a MemoryRetriever lookup to find similar past failures and tighten the retry budget.
 
 ### Workspace State
 
@@ -2027,8 +2078,9 @@ These commands work inside chat channels and interactive agent sessions:
 | `/dream-restore <sha>` | Restore memory to the state before a specific change |
 | `/help` | Show available in-chat commands |
 | `/plantask <goal>` | Submit a complex goal for hierarchical planning |
-| `/taskstatus` | Show TaskTree progress |
-| `/taskcancel` | Cancel the running TaskTree task |
+| `/plantask <goal>` (`-m` flag) | Auto-confirm, no interactive prompt (scripts/CI) |
+| `/taskstatus` | Show current TaskTree progress (full tree diagram) |
+| `/taskcancel` | Cancel the running TaskTree task and clear its checkpoint |
 
 <details>
 <summary><b>Heartbeat (Periodic Tasks)</b></summary>
