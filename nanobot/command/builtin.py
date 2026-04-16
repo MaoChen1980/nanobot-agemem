@@ -33,6 +33,80 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+async def cmd_plantask(ctx: CommandContext) -> OutboundMessage | None:
+    """Submit a goal to TaskTree for background execution."""
+    loop = ctx.loop
+    msg = ctx.msg
+    raw = ctx.raw
+    if not raw.lower().startswith("/plantask"):
+        return None
+    goal = raw[len("/plantask"):].strip()
+    if not goal:
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content="Usage: /plantask <goal>",
+            metadata=dict(msg.metadata or {}),
+        )
+    tasktree = getattr(loop, "tasktree_service", None)
+    if tasktree is None:
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content="TaskTree service not available.",
+            metadata=dict(msg.metadata or {}),
+        )
+    from nanobot.bus.events import InboundMessage
+    inbound = InboundMessage(
+        channel=msg.channel,
+        sender_id=msg.sender_id,
+        chat_id=msg.chat_id,
+        content=goal,
+        media=[],
+    )
+    await tasktree.submit(inbound)
+    return OutboundMessage(
+        channel=msg.channel, chat_id=msg.chat_id,
+        content=f"✅ TaskTree started: {goal[:80]}{'...' if len(goal) > 80 else ''}",
+        metadata=dict(msg.metadata or {}),
+    )
+
+
+async def cmd_taskstatus(ctx: CommandContext) -> OutboundMessage:
+    """Get TaskTree task status."""
+    loop = ctx.loop
+    msg = ctx.msg
+    tasktree = getattr(loop, "tasktree_service", None)
+    if tasktree is None:
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content="TaskTree service not available.",
+            metadata=dict(msg.metadata or {}),
+        )
+    status = await tasktree.get_status(msg.chat_id)
+    return OutboundMessage(
+        channel=msg.channel, chat_id=msg.chat_id, content=status,
+        metadata=dict(msg.metadata or {}),
+    )
+
+
+async def cmd_taskcancel(ctx: CommandContext) -> OutboundMessage:
+    """Cancel the running TaskTree task."""
+    loop = ctx.loop
+    msg = ctx.msg
+    tasktree = getattr(loop, "tasktree_service", None)
+    if tasktree is None:
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content="TaskTree service not available.",
+            metadata=dict(msg.metadata or {}),
+        )
+    cancelled = await tasktree.cancel(msg.chat_id, msg.channel)
+    content = "🛑 TaskTree 任务已取消" if cancelled else "没有正在运行的 TaskTree 任务"
+    return OutboundMessage(
+        channel=msg.channel, chat_id=msg.chat_id, content=content,
+        metadata=dict(msg.metadata or {}),
+    )
+
+
 async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
     """Restart the process in-place via os.execv."""
     msg = ctx.msg
@@ -326,6 +400,9 @@ def build_help_text() -> str:
         "🐈 nanobot commands:",
         "/new — Start a new conversation",
         "/stop — Stop the current task",
+        "/plantask <goal> — Submit a TaskTree goal (background)",
+        "/taskstatus — Check TaskTree status",
+        "/taskcancel — Cancel TaskTree task",
         "/restart — Restart the bot",
         "/status — Show bot status",
         "/dream — Manually trigger Dream consolidation",
@@ -341,6 +418,9 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/stop", cmd_stop)
     router.priority("/restart", cmd_restart)
     router.priority("/status", cmd_status)
+    router.priority("/plantask ", cmd_plantask)
+    router.priority("/taskstatus", cmd_taskstatus)
+    router.priority("/taskcancel", cmd_taskcancel)
     router.exact("/new", cmd_new)
     router.exact("/status", cmd_status)
     router.exact("/dream", cmd_dream)
