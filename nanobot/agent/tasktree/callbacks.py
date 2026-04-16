@@ -69,6 +69,17 @@ class SessionPersistenceCallback:
             logger.warning("Failed to load tree checkpoint: {}", e)
             return None
 
+    def clear_checkpoint(self) -> None:
+        """Delete the saved tree checkpoint."""
+        try:
+            session = self.session_manager.get_or_create(self.session_key)
+            if _TREE_CHECKPOINT_KEY in session.metadata:
+                del session.metadata[_TREE_CHECKPOINT_KEY]
+                self.session_manager.save(session)
+                logger.debug("Tree checkpoint cleared for {}", self.session_key)
+        except Exception as e:
+            logger.warning("Failed to clear tree checkpoint: {}", e)
+
     def _append_to_session(self, message: dict) -> None:
         """Append a message to the current session."""
         try:

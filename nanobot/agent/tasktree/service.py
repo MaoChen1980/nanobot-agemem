@@ -150,6 +150,8 @@ class TaskTreeService:
         task = self._tasks.get(chat_id)
         if task is None:
             return False
+        # Get channel BEFORE cleaning up _channels dict
+        channel = self._channels.get(chat_id, "cli")
         task.cancel()
         self._tasks.pop(chat_id, None)
         self._schedulers.pop(chat_id, None)
@@ -157,8 +159,17 @@ class TaskTreeService:
         self._input_events.pop(chat_id, None)
         self._pending_confirms.pop(chat_id, None)
         self._channels.pop(chat_id, None)
+        # Clear the checkpoint so the next submit starts fresh
+        session_key = f"tasktree:{chat_id}"
+        try:
+            session_cb = SessionPersistenceCallback(
+                session_manager=self.session_manager,
+                session_key=session_key,
+            )
+            session_cb.clear_checkpoint()
+        except Exception:
+            pass
         # Notify cancellation on the correct channel
-        channel = self._channels.get(chat_id, "cli")
         await self.bus.publish_outbound(OutboundMessage(
             channel=channel,
             chat_id=chat_id,
