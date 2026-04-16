@@ -70,13 +70,15 @@ class CommandRouter:
     def is_priority(self, text: str) -> bool:
         """Check if text matches a priority command (exact or prefix)."""
         text_lower = text.strip().lower()
-        logger.debug("is_priority checking: {!r}, priority_prefix: {}", text_lower, [p for p, _ in self._priority_prefix])
         if text_lower in self._priority:
+            logger.debug("is_priority {!r}: exact match in _priority", text_lower)
             return True
         # Also check priority prefix commands
         for pfx, _ in self._priority_prefix:
             if text_lower.startswith(pfx):
+                logger.debug("is_priority {!r}: prefix match {!r}", text_lower, pfx)
                 return True
+        logger.debug("is_priority {!r}: no match (priority={}, prefix={})", text_lower, list(self._priority.keys()), [p for p, _ in self._priority_prefix])
         return False
 
     async def dispatch_priority(self, ctx: CommandContext) -> OutboundMessage | None:

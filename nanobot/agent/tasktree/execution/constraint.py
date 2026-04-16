@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 class DefaultConstraintAgentConfig:
     """Configuration for DefaultConstraintAgent."""
 
-    max_depth: int = 10
+    max_depth: int = 1  # root + ≤4 children = 5 nodes max
     forbidden_actions: list[str] | None = None
     failure_count_limit: int = 10  # N=10 as confirmed by user
 
@@ -138,8 +138,11 @@ Node: {node.id} (depth {node.depth})
 Task: {node.goal}
 {parent_info}
 
+IMPORTANT: The overall plan must be capped at approximately 5 total execution steps.
+Keep the number of subgoals small and focused.
+
 Respond with a JSON object with these fields:
-- max_depth: maximum allowed depth from root (default 10)
+- max_depth: maximum allowed depth from root (default 1 — root + ≤4 children = 5 nodes max)
 - forbidden_actions: list of action names that should be blocked (e.g. ["rm_rf", "delete_file"])
 - failure_count_limit: how many times to retry the same root cause before giving up (default 10)
 

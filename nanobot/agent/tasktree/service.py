@@ -11,13 +11,14 @@ from nanobot.agent.tasktree import Scheduler
 from nanobot.agent.tasktree.callbacks import SessionPersistenceCallback
 from nanobot.agent.tasktree.execution import (
     DefaultConstraintAgent,
+    DefaultConstraintAgentConfig,
     DefaultExecutionAgent,
     LLMSubgoalParser,
     LLMVerificationAgent,
 )
 from nanobot.agent.tasktree.memory_callback import MemoryCallback
 from nanobot.agent.tasktree.models import FailureReport, NodeResult, TaskNode
-from nanobot.agent.tasktree.scheduler import SchedulerCallbacks
+from nanobot.agent.tasktree.scheduler import SchedulerCallbacks, SchedulerConfig
 from nanobot.agent.tasktree.tree import TaskTree
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
@@ -430,6 +431,7 @@ If the goal is already clear and specific, simply summarize it concisely."""
         constraint_agent = DefaultConstraintAgent(
             provider=self.provider,
             memory_retriever=self.memory_retriever,
+            config=DefaultConstraintAgentConfig(max_depth=1),  # cap at 5 nodes: root + 4 children
         )
         verification_agent = LLMVerificationAgent(
             provider=self.provider,
@@ -483,6 +485,7 @@ If the goal is already clear and specific, simply summarize it concisely."""
                 return self._input_results.get(chat_id, "")
 
         return Scheduler(
+            config=SchedulerConfig(max_children=4),  # cap at 5 nodes: root + 4 children
             execution_agent=execution_agent,
             constraint_agent=constraint_agent,
             subgoal_parser=LLMSubgoalParser(),
