@@ -121,18 +121,38 @@ class DefaultExecutionAgent:
             # Extract artifacts and detect workspace state
             artifacts, ws_state = self._extract_artifacts(result.messages)
 
-            # Detect if agent needs user input: it returned empty content (hit max
-            # iterations or stopped without content) and the service is available.
-            # The hook (_UserInputInjectHook) will have already injected any user
-            # input that arrived during the loop. If final_content is still empty,
-            # the user hasn't responded yet -- signal this to the scheduler.
+            # Parse structured agent response: detect {..., "user_input_request": "..."}
+            # so the agent can explicitly ask the user a specific question.
+            # Also accepts "summary" override in JSON.
             user_input_question: str | None = None
-            if not result.final_content and self._tasktree_service is not None:
-                user_input_question = "请确认如何继续执行任务，或者提供进一步指引。"
+            agent_summary: str | None = None
+            raw_content = result.final_content or ""
+            if raw_content.strip().startswith("{"):
+                try:
+                    import json
+                    parsed = json.loads(raw_content)
+                    user_input_question = parsed.get("user_input_request") or None
+                    agent_summary = parsed.get("summary")
+                except Exception:
+                    pass
+
+            # If no user_input_request in JSON, fall back to detecting
+            # a [USER_INPUT_REQUEST] marker in plain text.
+            if not user_input_question and raw_content:
+                marker = "[USER_INPUT_REQUEST]"
+                if marker in raw_content:
+                    idx = raw_content.index(marker)
+                    end = raw_content.index("]", idx)
+                    user_input_question = raw_content[idx + len(marker):end].strip()
+                    raw_content = raw_content[:idx].strip()
+
+            # Also update final_content to clean text (without marker)
+            if not agent_summary and not user_input_question:
+                agent_summary = raw_content
 
             return build_result_from_agent_response(
                 node_id=node.id,
-                agent_content=result.final_content or "",
+                agent_content=agent_summary or raw_content or "",
                 artifacts=artifacts,
                 token_spent=token_spent,
                 workspace_state=ws_state,
