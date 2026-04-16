@@ -182,8 +182,10 @@ class RetrieveMemoriesTool(_MemoryTool):
         lines = []
         for se in scored_entries:
             e = se.entry
+            freshness = f" {se.freshness_label}" if se.freshness_label else ""
+            ts = e.created_at[:16] if e.created_at else ""
             lines.append(
-                f"[id={e.id}] score={se.score:.3f} importance={e.importance} tags={e.tags}\n"
+                f"[id={e.id}] relevance={se.score:.3f}{freshness} created={ts} tags={e.tags}\n"
                 f"  {e.content[:200]}{'...' if len(e.content) > 200 else ''}"
             )
         return "Retrieved memories:\n" + "\n".join(lines)

@@ -11,8 +11,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-import numpy as np
-
 from nanobot.agent.agemem.entry import MemoryEntry
 from nanobot.agent.agemem.store import MemoryStoreV2
 
