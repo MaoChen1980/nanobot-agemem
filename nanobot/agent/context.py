@@ -64,8 +64,8 @@ class ContextBuilder:
         lines = []
         for se in scored:
             e = se.entry
-            ts = e.timestamp[:16] if e.timestamp else ""
-            src = f"来源: {e.source or 'nanobot记忆'}"
+            ts = e.created_at[:16] if e.created_at else ""
+            src = "来源: nanobot记忆"
             tags = f"[tags={', '.join(e.tags)}]" if e.tags else ""
             lines.append(f"- {src} {ts} {tags} {e.content[:150]}{'...' if len(e.content) > 150 else ''}")
 

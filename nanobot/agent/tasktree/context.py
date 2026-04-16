@@ -61,8 +61,8 @@ def build_node_context(
                 lines = []
                 for r in memories:
                     e = r.entry
-                    ts = e.timestamp[:16] if e.timestamp else ""
-                    src = f"来源: {e.source or 'nanobot记忆'}"
+                    ts = e.created_at[:16] if e.created_at else ""
+                    src = "来源: nanobot记忆"
                     lines.append(f"- {src} {ts}: {e.content[:150]}{'...' if len(e.content) > 150 else ''}")
                 memory_context = "\n".join(lines)
                 system_prompt += (
