@@ -121,7 +121,16 @@ class MemoryHook(AgentHook):
             if msg.get("role") == "user":
                 content = msg.get("content", "")
                 if isinstance(content, str) and content.strip():
-                    self._task_description = content.strip()[:200]  # Cap at 200 chars
+                    # Strip the Runtime Context block so GRPO task description
+                    # contains only the actual user message, not metadata.
+                    text = content.strip()
+                    ctx_start = "[Runtime Context"
+                    ctx_end = "[/Runtime Context]"
+                    if ctx_start in text:
+                        end_idx = text.find(ctx_end)
+                        if end_idx != -1:
+                            text = text[end_idx + len(ctx_end):].strip()
+                    self._task_description = text[:200]  # Cap at 200 chars
                     break
 
         # Start GRPO trajectory
