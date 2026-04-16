@@ -99,7 +99,7 @@ async def cmd_taskcancel(ctx: CommandContext) -> OutboundMessage:
             content="TaskTree service not available.",
             metadata=dict(msg.metadata or {}),
         )
-    cancelled = await tasktree.cancel(msg.chat_id, msg.channel)
+    cancelled = await tasktree.cancel(msg.chat_id)
     content = "🛑 TaskTree 任务已取消" if cancelled else "没有正在运行的 TaskTree 任务"
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content=content,
