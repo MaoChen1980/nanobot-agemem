@@ -159,6 +159,7 @@ def build_result_from_agent_response(
     artifacts: list[dict[str, Any]] | None = None,
     token_spent: int = 0,
     workspace_state: str = "clean",
+    user_input_question: str | None = None,
 ) -> NodeResult:
     """Convert an ExecutionAgent's raw output into a NodeResult.
 
@@ -170,6 +171,7 @@ def build_result_from_agent_response(
         artifacts: optional list of artifact dicts (type, path, description)
         token_spent: estimated token count for this execution
         workspace_state: "clean" | "partial" | "dirty" indicating workspace modifications
+        user_input_question: if set, the node needs user input before it can complete
 
     Returns:
         A NodeResult ready to return to the Scheduler.
@@ -202,6 +204,7 @@ def build_result_from_agent_response(
         constraints_respected=True,
         token_spent=token_spent,
         workspace_state=WorkspaceState(workspace_state),
+        user_input_question=user_input_question,
     )
 
 

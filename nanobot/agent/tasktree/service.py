@@ -351,6 +351,7 @@ If the goal is already clear and specific, simply summarize it concisely."""
             tools=self.tools,
             context_builder=self.context_builder,
             session_manager=self.session_manager,
+            tasktree_service=self,
         )
         constraint_agent = DefaultConstraintAgent(
             provider=self.provider,

@@ -337,6 +337,9 @@ class AgentRunner:
                     )
                     if should_continue:
                         had_injections = True
+                        _user_input = hook.on_iteration_end(context)
+                        if _user_input:
+                            messages.append({"role": "user", "content": _user_input})
                         continue
                     break
                 await self._emit_checkpoint(
@@ -360,6 +363,10 @@ class AgentRunner:
                 if _drained:
                     had_injections = True
                 await hook.after_iteration(context)
+                # Allow hook to inject user input before next iteration
+                _user_input = hook.on_iteration_end(context)
+                if _user_input:
+                    messages.append({"role": "user", "content": _user_input})
                 continue
 
             clean = hook.finalize_content(context, response.content)
@@ -376,6 +383,9 @@ class AgentRunner:
                     if hook.wants_streaming():
                         await hook.on_stream_end(context, resuming=False)
                     await hook.after_iteration(context)
+                    _user_input = hook.on_iteration_end(context)
+                    if _user_input:
+                        messages.append({"role": "user", "content": _user_input})
                     continue
                 logger.warning(
                     "Empty response on turn {} for {} after {} retries; attempting finalization",
@@ -413,6 +423,9 @@ class AgentRunner:
                     ))
                     messages.append(build_length_recovery_message())
                     await hook.after_iteration(context)
+                    _user_input = hook.on_iteration_end(context)
+                    if _user_input:
+                        messages.append({"role": "user", "content": _user_input})
                     continue
 
             assistant_message: dict[str, Any] | None = None
@@ -439,6 +452,9 @@ class AgentRunner:
 
             if should_continue:
                 await hook.after_iteration(context)
+                _user_input = hook.on_iteration_end(context)
+                if _user_input:
+                    messages.append({"role": "user", "content": _user_input})
                 continue
 
             if response.finish_reason == "error":

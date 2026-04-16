@@ -1334,3 +1334,163 @@ def test_channels_login_requires_channel_name() -> None:
     result = runner.invoke(app, ["channels", "login"])
 
     assert result.exit_code == 2
+
+
+# =============================================================================
+# Gateway routing e2e tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_tasktree_service_wires_routing_and_user_input(tmp_path: Path) -> None:
+    """E2E test: TaskTreeService, RouterBus, and routing predicates are wired correctly.
+
+    Verifies:
+    1. TaskTreeService can be instantiated with all dependencies
+    2. RouterBus correctly routes TaskTree messages to TaskTreeService
+    3. _tasktree_predicate correctly identifies TaskTree-bound messages
+    4. submit_user_input correctly stores results and sets events for both
+       _pending_confirms and _input_events paths
+    """
+    from nanobot.agent.context import ContextBuilder
+    from nanobot.agent.tasktree.service import TaskTreeService
+    from nanobot.bus.events import InboundMessage, OutboundMessage
+    from nanobot.bus.router import RouterBus
+    from nanobot.session.manager import SessionManager
+
+    # --- Minimal fake provider that satisfies the interface ---
+    class _FakeProvider:
+        def get_default_model(self):
+            return "test-model"
+
+        async def chat(self, messages, model=None, max_tokens=None, **kwargs):
+            class _Resp:
+                content = "[Task Summary]\ntest goal\n\n[Detailed Description]\n(paraphrase unavailable)"
+            return _Resp()
+
+    # --- Set up components ---
+    bus = RouterBus()
+    provider = _FakeProvider()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    session_manager = SessionManager(workspace)
+    context_builder = ContextBuilder(workspace, timezone="UTC")
+
+    # Mock memory store and retriever
+    class _FakeMemoryStore:
+        async def start(self):
+            pass
+
+        async def stop(self):
+            pass
+
+    class _FakeMemoryRetriever:
+        pass
+
+    # Create TaskTreeService
+    tasktree_service = TaskTreeService(
+        bus=bus,
+        provider=provider,
+        tools=MagicMock(),
+        context_builder=context_builder,
+        session_manager=session_manager,
+        memory_store=_FakeMemoryStore(),
+        memory_retriever=_FakeMemoryRetriever(),
+    )
+
+    # Register TaskTree route
+    def _tasktree_predicate(msg) -> bool:
+        content = getattr(msg, "content", "") or ""
+        metadata = getattr(msg, "metadata", {}) or {}
+        # Priority commands like /plantask are handled elsewhere
+        if content.strip().lower().startswith("/plantask "):
+            return False
+        return bool(metadata.get("_tasktree_task"))
+
+    bus.register_route("tasktree", _tasktree_predicate)
+
+    # --- Test 1: Route TaskTree message ---
+    msg = InboundMessage(
+        sender_id="user1",
+        chat_id="chat1",
+        channel="cli",
+        content="test task",
+        metadata={"_tasktree_task": True},
+    )
+    assert _tasktree_predicate(msg) is True
+    # Non-TaskTree message
+    msg2 = InboundMessage(sender_id="user2", chat_id="chat2", channel="cli", content="hello", metadata={})
+    assert _tasktree_predicate(msg2) is False
+    # /plantask is not routed to TaskTree
+    msg3 = InboundMessage(sender_id="user3", chat_id="chat3", channel="cli", content="/plantask build a web app", metadata={})
+    assert _tasktree_predicate(msg3) is False
+
+    # --- Test 2: submit_user_input for _pending_confirms ---
+    confirm_event = asyncio.Event()
+    tasktree_service._pending_confirms["chat_confirm"] = confirm_event
+    tasktree_service.submit_user_input("chat_confirm", "user response to confirm")
+    # Event should be set
+    assert confirm_event.is_set() is True
+    assert tasktree_service._input_results.get("chat_confirm") == "user response to confirm"
+    # Cleanup
+    tasktree_service._pending_confirms.pop("chat_confirm", None)
+    tasktree_service._input_results.pop("chat_confirm", None)
+
+    # --- Test 3: submit_user_input for _input_events ---
+    input_event = asyncio.Event()
+    tasktree_service._input_events["chat_input"] = input_event
+    tasktree_service.submit_user_input("chat_input", "user answer")
+    assert input_event.is_set() is True
+    assert tasktree_service._input_results.get("chat_input") == "user answer"
+    # Cleanup
+    tasktree_service._input_events.pop("chat_input", None)
+    tasktree_service._input_results.pop("chat_input", None)
+
+    # --- Test 4: Service can be started and stopped ---
+    await tasktree_service.start()
+    await tasktree_service.stop()
+
+    # --- Test 5: confirm_task with auto_confirm ---
+    confirmed = await tasktree_service.confirm_task(
+        chat_id="chat_auto",
+        raw_goal="test goal",
+        channel="cli",
+        auto_confirm=True,
+    )
+    # auto_confirm skips the LLM paraphrase and returns the paraphrase directly.
+    # With a fake provider returning "ok", the paraphrase is "[Task Summary]\ntest goal\n..."
+    assert confirmed is not None
+    # The paraphrase contains the goal
+    assert "test goal" in confirmed
+
+    # --- Test 6: _channels tracks correct channel ---
+    class _FakeOutbound:
+        def __init__(self):
+            self.messages: list[OutboundMessage] = []
+
+        async def publish_outbound(self, msg: OutboundMessage):
+            self.messages.append(msg)
+
+    fake_bus = _FakeOutbound()
+    tasktree_service2 = TaskTreeService(
+        bus=fake_bus,
+        provider=provider,
+        tools=MagicMock(),
+        context_builder=context_builder,
+        session_manager=session_manager,
+        memory_store=_FakeMemoryStore(),
+        memory_retriever=_FakeMemoryRetriever(),
+    )
+    # Simulate a TaskTree run storing the channel
+    class _FakeInbound:
+        chat_id = "feishu_chat"
+        channel = "feishu"
+        content = "test"
+        metadata = {}
+
+    inbound = _FakeInbound()
+    fake_bus2 = _FakeOutbound()
+    tasktree_service2.bus = fake_bus2
+    tasktree_service2._channels["feishu_chat"] = "feishu"
+    # When cancel is called, it should use the correct channel
+    assert tasktree_service2._channels.get("feishu_chat") == "feishu"

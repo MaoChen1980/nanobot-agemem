@@ -50,6 +50,14 @@ class AgentHook:
     async def after_iteration(self, context: AgentHookContext) -> None:
         pass
 
+    def on_iteration_end(self, context: AgentHookContext) -> str | None:
+        """Called at the end of each iteration, before the next iteration begins.
+
+        Return a string to inject it as a user message in the next iteration.
+        Override to inject user input into the agent loop.
+        """
+        return None
+
     def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:
         return content
 
@@ -96,6 +104,14 @@ class CompositeHook(AgentHook):
 
     async def after_iteration(self, context: AgentHookContext) -> None:
         await self._for_each_hook_safe("after_iteration", context)
+
+    def on_iteration_end(self, context: AgentHookContext) -> str | None:
+        """Return user input from the first hook that provides it."""
+        for h in self._hooks:
+            result = h.on_iteration_end(context)
+            if result is not None:
+                return result
+        return None
 
     def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:
         for h in self._hooks:

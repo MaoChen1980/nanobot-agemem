@@ -198,6 +198,22 @@ class Scheduler:
             if self.verification_agent is None:
                 break
 
+            # Skip verification if the tree has no real execution artifacts.
+            # This happens for planning-only tasks (e.g. /plantask) where the root
+            # and all children are just planning nodes with no code/files produced.
+            # We detect this by checking if ALL nodes have no artifacts AND no
+            # meaningful summary (i.e., all summaries are empty or "Task completed.").
+            all_nodes = list(self._tree.nodes.values())
+            has_meaningful_content = any(
+                (n.result and n.result.artifacts) or
+                (n.result and n.result.summary and
+                 n.result.summary != "Task completed.")
+                for n in all_nodes
+            )
+            if not has_meaningful_content:
+                logger.debug("All nodes have empty artifacts and summaries, skipping verification (planning-only task)")
+                break
+
             if verification_retries >= self.config.max_verification_retries:
                 logger.warning(
                     "Scheduler: max verification retries ({}) reached",

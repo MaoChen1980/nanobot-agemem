@@ -49,6 +49,7 @@ class DefaultExecutionAgent:
         context_builder: ContextBuilder,
         session_manager: SessionManager,
         config: DefaultExecutionAgentConfig | None = None,
+        tasktree_service: Any = None,  # TaskTreeService, for user input during execution
     ):
         self.provider = provider
         self.tools = tools
@@ -57,6 +58,7 @@ class DefaultExecutionAgent:
         self.runner = AgentRunner(provider)
         self.config = config or DefaultExecutionAgentConfig()
         self._model = self.config.model or provider.get_default_model()
+        self._tasktree_service = tasktree_service
 
     async def execute(
         self,
@@ -95,13 +97,18 @@ class DefaultExecutionAgent:
                 chat_id=chat_id,
             )
 
+        # Choose hook: _UserInputInjectHook if service is available, otherwise _NoOpHook
+        _hook = _NoOpHook()
+        if self._tasktree_service is not None:
+            _hook = _UserInputInjectHook(self._tasktree_service, chat_id)
+
         spec = AgentRunSpec(
             initial_messages=messages,
             tools=self.tools,
             model=self._model,
             max_iterations=self.config.max_iterations,
             max_tool_result_chars=self.config.max_tool_result_chars,
-            hook=_NoOpHook(),
+            hook=_hook,
         )
 
         try:
@@ -114,12 +121,22 @@ class DefaultExecutionAgent:
             # Extract artifacts and detect workspace state
             artifacts, ws_state = self._extract_artifacts(result.messages)
 
+            # Detect if agent needs user input: it returned empty content (hit max
+            # iterations or stopped without content) and the service is available.
+            # The hook (_UserInputInjectHook) will have already injected any user
+            # input that arrived during the loop. If final_content is still empty,
+            # the user hasn't responded yet -- signal this to the scheduler.
+            user_input_question: str | None = None
+            if not result.final_content and self._tasktree_service is not None:
+                user_input_question = "请确认如何继续执行任务，或者提供进一步指引。"
+
             return build_result_from_agent_response(
                 node_id=node.id,
                 agent_content=result.final_content or "",
                 artifacts=artifacts,
                 token_spent=token_spent,
                 workspace_state=ws_state,
+                user_input_question=user_input_question,
             )
         except Exception as e:
             logger.exception("ExecutionAgent error for node {}", node.id)
@@ -201,6 +218,28 @@ class DefaultExecutionAgent:
                     workspace_state = "dirty"
 
         return artifacts, workspace_state
+
+
+class _UserInputInjectHook(AgentHook):
+    """Hook that injects user input from TaskTreeService into the agent loop.
+
+    When the scheduler calls request_user_input(), the user's response is stored
+    in service._input_results[chat_id]. This hook checks for it at the end of
+    each iteration and injects it as the next user message.
+    """
+
+    __slots__ = ("_service", "_chat_id")
+
+    def __init__(self, service: Any, chat_id: str):
+        self._service = service
+        self._chat_id = chat_id
+
+    def on_iteration_end(self, context: AgentHookContext) -> str | None:
+        # Always check for user input — it may have arrived via submit_user_input
+        return self._service._input_results.pop(self._chat_id, None)
+
+    def wants_streaming(self) -> bool:
+        return False
 
 
 class _NoOpHook(AgentHook):
