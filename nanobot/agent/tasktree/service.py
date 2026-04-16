@@ -609,8 +609,8 @@ If the goal is already clear and specific, simply summarize it concisely."""
         inbound: InboundMessage,
     ) -> OutboundMessage:
         """Build an OutboundMessage from the root result."""
-        # Tree diagram
-        tree_diagram = self._render_tree_diagram(tree)
+        # Tree diagram — use concise format for all channels
+        tree_diagram = self._format_tree_status(tree)
 
         # Summary + artifacts
         content = root_result.summary or "Task completed."
