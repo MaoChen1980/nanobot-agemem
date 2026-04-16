@@ -62,104 +62,71 @@ class AgentHook:
         return content
 
 
-_FACTUAL_QUESTION_KEYWORDS = (
-    # 代码类
-    "代码", "怎么实现", "哪里", "哪个文件", "函数", "逻辑",
-    "怎么写", "实现原理", "源代码", "source code", "file:", "line ",
-    "怎么做的", "哪个函数", "什么逻辑", "在哪", "代码在哪",
-    # 来源/归属类（触发"谁/哪个/是不是"类问题）
-    "谁", "哪个", "来源", "是不是", "是否", "生成", "创建",
-    "是谁", "是不是在", "是不是由", "是不是nanobot", ".md是谁",
-    "什么时候", "为什么", "为什么会", "为什么是",
-    # 文件/项目类
-    ".md", "memory/", "nanobot/",
+_CODE_QUESTION_KEYWORDS = (
+    "代码", "怎么实现", "函数", "逻辑", "实现原理",
+    "源代码", "source code", "file:", "line ",
 )
 
 
 class SourceTracingHook(AgentHook):
-    """Enforces answer sourcing for factual and code questions.
+    """Enforces tool use for code questions to prevent fabrication.
 
-    Strategy:
-    - on_iteration_end: if a factual/code question was answered without tools
-      and no citations, trigger a retry with tool-use requirement
-    - finalize_content: if retry wasn't possible (last iteration), rewrite
-      the response to express uncertainty instead of fabricating
+    Code-related questions are high-risk for hallucination.
+    If no tools were called and no source citations exist, trigger a retry
+    or rewrite the response to express uncertainty.
     """
 
     def __init__(self, require_citations: bool = True) -> None:
         super().__init__()
         self._require_citations = require_citations
-        self._triggered: bool = False  # prevent double-fire in same turn
+        self._triggered: bool = False
 
-    def _is_factual_question(self, text: str) -> bool:
+    def _is_code_question(self, text: str) -> bool:
         if not text:
             return False
-        return any(kw in text for kw in _FACTUAL_QUESTION_KEYWORDS)
+        return any(kw in text for kw in _CODE_QUESTION_KEYWORDS)
 
-    def _has_source_citation(self, text: str | None) -> bool:
+    def _has_citation(self, text: str | None) -> bool:
         if not text:
             return False
         return "file:" in text or "line " in text
 
     def _should_retry(self, context: AgentHookContext) -> bool:
-        """Check if a factual question was answered without evidence."""
         if context.final_content is None:
             return False
-
         last_user_msg = ""
         for msg in reversed(context.messages):
             if msg.get("role") == "user":
                 last_user_msg = msg.get("content", "")
                 break
-
-        if not self._is_factual_question(last_user_msg):
+        if not self._is_code_question(last_user_msg):
             return False
-
-        has_tool_calls = bool(context.tool_calls)
-        has_citations = self._has_source_citation(context.final_content)
-
-        return not has_tool_calls and not has_citations
+        return not bool(context.tool_calls) and not self._has_citation(context.final_content)
 
     def on_iteration_end(self, context: AgentHookContext) -> str | None:
         if self._triggered:
             return None
         if not self._should_retry(context):
             return None
-
         self._triggered = True
         return (
-            "[答案溯源检查] 你回答了一个事实性问题，但没有调用任何工具，也没有引用任何来源。\n"
-            "请重新回答：必须先用 Read/grep/WebSearch 等工具查阅实际内容，"
-            "答案必须包含具体的来源引用（如 file:line 或 URL）。\n"
-            "不要凭记忆回答，不要编造答案。如果查不到，明确说'我不确定'。"
+            "[答案溯源检查] 你回答了一个代码相关问题，但没有调用任何工具，也没有引用任何来源。\n"
+            "请重新回答：必须先用 Read/grep 等工具查阅实际代码，"
+            "答案必须包含具体的 file:line 引用。不要凭记忆回答，不要编造代码内容。"
         )
 
     def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:
-        """Rewrite answers that couldn't be retried (last iteration) to express uncertainty."""
         if content is None:
             return None
         if self._triggered:
-            # Retry already happened; don't override
             self._triggered = False
             return content
-
         if not self._should_retry(context):
             return content
-
-        # Last iteration and fabricator still didn't use tools → rewrite as uncertain
         self._triggered = False
-        last_user_msg = ""
-        for msg in reversed(context.messages):
-            if msg.get("role") == "user":
-                last_user_msg = msg.get("content", "")
-                break
-
-        question_preview = last_user_msg[:100].replace("\n", " ")
         return (
-            f"[答案溯源检查 — 无法确认]\n"
-            f"你提问了：{question_preview}...\n\n"
-            f"我的回答包含未经证实的声明。nanobot 禁止编造答案。\n"
-            f"请重新提问，我会先查源码/文件/网络再回答。"
+            "[答案溯源检查] 我的回答包含未经证实的声明。\n"
+            "请重新提问涉及代码的问题，我会先查源码再回答。"
         )
 
 
