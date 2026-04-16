@@ -38,10 +38,12 @@ class PlantaskTool(Tool):
         # Use the current session's chat_id so the command handler and LLM tool
         # operate on the same TaskTree session.
         session_key = kwargs.get("session_key", "sdk:direct")
-        # Extract the raw chat_id (e.g. "feishu:open_id" -> "open_id")
-        chat_id = session_key.split(":")[-1]
+        # Extract channel and chat_id from session_key (e.g. "feishu:ou_xxx" -> channel="feishu", chat_id="ou_xxx")
+        parts = session_key.split(":", 1)
+        channel = parts[0] if len(parts) > 1 else "cli"
+        chat_id = parts[-1]
         inbound = InboundMessage(
-            channel="cli",
+            channel=channel,
             sender_id="llm",
             chat_id=chat_id,
             content=goal,
