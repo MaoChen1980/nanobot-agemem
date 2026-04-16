@@ -64,11 +64,16 @@ class ContextBuilder:
         lines = []
         for se in scored:
             e = se.entry
-            relevance = f"[relevance={se.score:.2f}]"
+            ts = e.timestamp[:16] if e.timestamp else ""
+            src = f"来源: {e.source or 'nanobot记忆'}"
             tags = f"[tags={', '.join(e.tags)}]" if e.tags else ""
-            lines.append(f"- {relevance} {tags} {e.content[:150]}{'...' if len(e.content) > 150 else ''}")
+            lines.append(f"- {src} {ts} {tags} {e.content[:150]}{'...' if len(e.content) > 150 else ''}")
 
-        return "## Retrieved Memories\n" + "\n".join(lines)
+        return (
+            "[记忆参考 — 仅供参考，可能有偏差，不保证准确]\n"
+            + "\n".join(lines)
+            + "\n[/记忆参考]"
+        )
 
     def build_system_prompt(
         self,
@@ -91,12 +96,12 @@ class ContextBuilder:
             parts.append(bootstrap)
 
         if memory_context:
-            parts.append(f"# Memory\n\n{memory_context}")
+            parts.append(f"# 记忆参考\n\n{memory_context}")
         else:
             # Legacy: full MEMORY.md injection (backward compat)
             memory = self.memory.get_memory_context()
             if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
-                parts.append(f"# Memory\n\n{memory}")
+                parts.append(f"# 记忆参考（仅供参考，可能有偏差）\n\n{memory}")
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -111,7 +116,7 @@ class ContextBuilder:
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
         if entries:
             capped = entries[-self._MAX_RECENT_HISTORY:]
-            parts.append("# Recent History\n\n" + "\n".join(
+            parts.append("# 历史记录参考（仅供参考，可能有偏差）\n\n" + "\n".join(
                 f"- [{e['timestamp']}] {e['content']}" for e in capped
             ))
 
