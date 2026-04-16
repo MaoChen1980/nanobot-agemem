@@ -35,6 +35,7 @@ from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.update_context import UpdateContextTool
 from nanobot.agent.tools.list_subagents import ListSubagentsTool
+from nanobot.agent.tools.tasktree_tools import PlantaskTool, TaskStatusTool, TaskCancelTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
 from nanobot.agent.tools.memory import (
     AddMemoryTool,
@@ -172,6 +173,7 @@ class AgentLoop:
         unified_session: bool = False,
         disabled_skills: list[str] | None = None,
         memory_config: "MemoryConfig | None" = None,
+        tasktree_service: Any = None,
     ):
         from nanobot.config.schema import ExecToolConfig, WebToolsConfig
 
@@ -238,6 +240,7 @@ class AgentLoop:
             restrict_to_workspace=restrict_to_workspace,
             disabled_skills=disabled_skills,
         )
+        self._tasktree_service = tasktree_service
         self._unified_session = unified_session
         self._running = False
         self._mcp_servers = mcp_servers or {}
@@ -318,6 +321,10 @@ class AgentLoop:
         self.tools.register(SpawnTool(manager=self.subagents))
         self.tools.register(UpdateContextTool(manager=self.subagents))
         self.tools.register(ListSubagentsTool(manager=self.subagents))
+        if self._tasktree_service:
+            self.tools.register(PlantaskTool(tasktree_service=self._tasktree_service))
+            self.tools.register(TaskStatusTool(tasktree_service=self._tasktree_service))
+            self.tools.register(TaskCancelTool(tasktree_service=self._tasktree_service))
         if self.cron_service:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")

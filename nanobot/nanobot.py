@@ -139,6 +139,7 @@ class Nanobot:
             session_ttl_minutes=defaults.session_ttl_minutes,
             memory_config=defaults.memory,
             session_manager=session_manager,
+            tasktree_service=tasktree_service,
         )
         return cls(loop, router, tasktree_service)
 
