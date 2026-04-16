@@ -71,6 +71,13 @@ class SchedulerCallbacks(Protocol):
     def on_node_failed(self, node: TaskNode, failure: FailureReport) -> None: ...
     def on_node_blocked(self, node: TaskNode, failure: FailureReport) -> None: ...
     def save_checkpoint(self, tree: TaskTree) -> None: ...
+    async def on_user_input_request(self, question: str) -> None:
+        """Called when a node needs user input before it can proceed.
+
+        Implementations should publish the question to the user and wait for a response
+        via TaskTreeService.submit_user_input().
+        """
+        ...
 
 
 @dataclass
@@ -300,6 +307,11 @@ class Scheduler:
 
         # 5. Route result
         if isinstance(result_or_failure, NodeResult):
+            # If node needs user input, ask and wait before proceeding
+            if result_or_failure.user_input_question and self.callbacks:
+                result_or_failure.user_input_answer = await self.callbacks.on_user_input_request(
+                    result_or_failure.user_input_question
+                )
             await self._handle_success(node, result_or_failure)
             await self._bubble_up(node)
         else:

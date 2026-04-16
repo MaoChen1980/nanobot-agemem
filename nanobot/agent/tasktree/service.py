@@ -401,6 +401,12 @@ If the goal is already clear and specific, simply summarize it concisely."""
                 memory_cb.on_node_blocked(node, failure)
                 self._notify("🚫", node.id, f"被阻止: {failure.summary[:60]}")
 
+            async def on_user_input_request(self, question: str) -> str:
+                """Ask user a question and return their response."""
+                event = await service.request_user_input(chat_id, question, channel)
+                await event.wait()
+                return self._input_results.get(chat_id, "")
+
         return Scheduler(
             execution_agent=execution_agent,
             constraint_agent=constraint_agent,

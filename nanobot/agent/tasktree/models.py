@@ -102,6 +102,8 @@ class NodeResult:
     constraints_respected: bool = True
     token_spent: int = 0
     workspace_state: WorkspaceState = WorkspaceState.CLEAN
+    user_input_question: str | None = None  # If set, node needs user input before proceeding
+    user_input_answer: str | None = None   # User's response to the question
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -112,6 +114,8 @@ class NodeResult:
             "constraints_respected": self.constraints_respected,
             "token_spent": self.token_spent,
             "workspace_state": self.workspace_state.value,
+            "user_input_question": self.user_input_question,
+            "user_input_answer": self.user_input_answer,
         }
 
     @classmethod
@@ -124,6 +128,8 @@ class NodeResult:
             constraints_respected=d.get("constraints_respected", True),
             token_spent=d.get("token_spent", 0),
             workspace_state=WorkspaceState(d.get("workspace_state", "clean")),
+            user_input_question=d.get("user_input_question"),
+            user_input_answer=d.get("user_input_answer"),
         )
 
 
