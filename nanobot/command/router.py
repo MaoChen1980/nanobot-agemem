@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from loguru import logger
+
 if TYPE_CHECKING:
     from nanobot.bus.events import InboundMessage, OutboundMessage
     from nanobot.session.manager import Session
@@ -68,6 +70,7 @@ class CommandRouter:
     def is_priority(self, text: str) -> bool:
         """Check if text matches a priority command (exact or prefix)."""
         text_lower = text.strip().lower()
+        logger.debug("is_priority checking: {!r}, priority_prefix: {}", text_lower, [p for p, _ in self._priority_prefix])
         if text_lower in self._priority:
             return True
         # Also check priority prefix commands
