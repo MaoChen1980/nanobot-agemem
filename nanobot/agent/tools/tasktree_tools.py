@@ -53,6 +53,7 @@ class PlantaskTool(Tool):
         return f"TaskTree started for goal: {goal[:80]}{'...' if len(goal) > 80 else ''}. Use taskstatus() to check progress."
 
 
+@tool_parameters(tool_parameters_schema())
 class TaskStatusTool(Tool):
     """Get the current status of the running TaskTree task."""
 
@@ -77,6 +78,7 @@ class TaskStatusTool(Tool):
         return status
 
 
+@tool_parameters(tool_parameters_schema())
 class TaskCancelTool(Tool):
     """Cancel the currently running TaskTree task."""
 
