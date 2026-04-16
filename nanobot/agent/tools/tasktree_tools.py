@@ -35,8 +35,11 @@ class PlantaskTool(Tool):
         """Submit a TaskTree goal."""
         from nanobot.bus.events import InboundMessage
 
-        # Use a consistent chat_id that matches AgentLoop's process_direct
-        chat_id = "sdk:direct"
+        # Use the current session's chat_id so the command handler and LLM tool
+        # operate on the same TaskTree session.
+        session_key = kwargs.get("session_key", "sdk:direct")
+        # Extract the raw chat_id (e.g. "feishu:open_id" -> "open_id")
+        chat_id = session_key.split(":")[-1]
         inbound = InboundMessage(
             channel="cli",
             sender_id="llm",
@@ -74,7 +77,9 @@ class TaskStatusTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         """Get TaskTree status."""
-        status = await self._service.get_status("sdk:direct")
+        session_key = kwargs.get("session_key", "sdk:direct")
+        chat_id = session_key.split(":")[-1]
+        status = await self._service.get_status(chat_id)
         return status
 
 
@@ -99,7 +104,9 @@ class TaskCancelTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         """Cancel TaskTree task."""
-        cancelled = await self._service.cancel("sdk:direct")
+        session_key = kwargs.get("session_key", "sdk:direct")
+        chat_id = session_key.split(":")[-1]
+        cancelled = await self._service.cancel(chat_id)
         if cancelled:
             return "TaskTree task cancelled."
         return "No running TaskTree task found."

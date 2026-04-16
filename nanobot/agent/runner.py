@@ -693,10 +693,13 @@ class AgentRunner:
             }
             return prep_error + _HINT, event, RuntimeError(prep_error) if spec.fail_on_tool_error else None
         try:
+            extra: dict[str, Any] = {}
+            if spec.session_key:
+                extra["session_key"] = spec.session_key
             if tool is not None:
-                result = await tool.execute(**params)
+                result = await tool.execute(**params, **extra)
             else:
-                result = await spec.tools.execute(tool_call.name, params)
+                result = await spec.tools.execute(tool_call.name, params, **extra)
         except asyncio.CancelledError:
             raise
         except BaseException as exc:

@@ -89,8 +89,13 @@ class ToolRegistry:
             )
         return tool, cast_params, None
 
-    async def execute(self, name: str, params: dict[str, Any]) -> Any:
-        """Execute a tool by name with given parameters."""
+    async def execute(self, name: str, params: dict[str, Any], **extra: Any) -> Any:
+        """Execute a tool by name with given parameters.
+
+        Additional ``**extra`` kwargs are merged into the params before calling
+        the tool's execute method, allowing callers to inject context (e.g.
+        session_key) that tools can optionally consume.
+        """
         _HINT = "\n\n[Analyze the error above and try a different approach.]"
         tool, params, error = self.prepare_call(name, params)
         if error:
@@ -98,7 +103,8 @@ class ToolRegistry:
 
         try:
             assert tool is not None  # guarded by prepare_call()
-            result = await tool.execute(**params)
+            merged = {**params, **extra}
+            result = await tool.execute(**merged)
             if isinstance(result, str) and result.startswith("Error"):
                 return result + _HINT
             return result
