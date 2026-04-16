@@ -952,7 +952,7 @@ def gateway(
             if agent.commands.is_priority(raw):
                 # Special handling for /plantask: submit to TaskTreeService
                 raw_lower = raw.lower()
-                if raw_lower.startswith("/plantask "):
+                if raw_lower.startswith("/plantask"):
                     goal = raw[len("/plantask"):].strip()
                     inbound = type(msg)(
                         channel=msg.channel,

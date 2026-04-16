@@ -34,10 +34,12 @@ class Nanobot:
         print(result.content)
     """
 
-    def __init__(self, loop: AgentLoop, router: RouterBus, tasktree_service: TaskTreeService | None = None) -> None:
+    def __init__(self, loop: AgentLoop, router: RouterBus, tasktree_service: TaskTreeService | None = None, tasktree_queue: asyncio.Queue | None = None) -> None:
         self._loop = loop
         self._router = router
         self._tasktree = tasktree_service
+        self._tasktree_queue = tasktree_queue
+        self._tasktree_consumer_task: asyncio.Task | None = None
 
     @classmethod
     def from_config(
@@ -129,7 +131,6 @@ class Nanobot:
                 except Exception:
                     logger.exception("tasktree consumer error")
 
-        asyncio.create_task(_tasktree_consumer())
 
         # AgentLoop receives everything else (non-TaskTree messages)
         loop = AgentLoop(
@@ -154,7 +155,7 @@ class Nanobot:
             session_manager=session_manager,
             tasktree_service=tasktree_service,
         )
-        return cls(loop, router, tasktree_service)
+        return cls(loop, router, tasktree_service, tasktree_queue)
 
     async def run(
         self,
@@ -171,6 +172,22 @@ class Nanobot:
                 Different keys get independent history.
             hooks: Optional lifecycle hooks for this run.
         """
+        # Start the TaskTree consumer task once (idempotent — no-op if already started)
+        if self._tasktree_consumer_task is None:
+            await self._router.start_router()
+
+            async def _tasktree_consumer() -> None:
+                while True:
+                    try:
+                        msg = await self._tasktree_queue.get()
+                        await self._tasktree.submit(msg)
+                    except asyncio.CancelledError:
+                        break
+                    except Exception:
+                        logger.exception("tasktree consumer error")
+
+            self._tasktree_consumer_task = asyncio.create_task(_tasktree_consumer())
+
         prev = self._loop._extra_hooks
         if hooks is not None:
             self._loop._extra_hooks = list(hooks)
