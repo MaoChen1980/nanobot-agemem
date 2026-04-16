@@ -22,6 +22,7 @@
 ## 📢 News
 
 - **2026-04-16** 🌳 **TaskTree v2** — complete rewrite with tree diagram output on completion, agent context awareness (the agent knows when TaskTree is running or waiting for input), multi-channel routing, user input injection via structured JSON, and busy rejection for concurrent submits. Try `/plantask <goal>` for complex multi-step tasks.
+- **2026-04-16** 🛡️ **Answer Sourcing** — agent now enforces tool use for code/factual questions. Responses without source citations are blocked or retried. `SourceTracingHook` + system prompt rules prevent fabricated answers.
 - **2026-04-14** 🚀 Released **v0.1.5.post1** — Dream skill discovery, mid-turn follow-up injection, WebSocket channel, and deeper channel integrations. Please see [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.5.post1) for details.
 - **2026-04-13** 🛡️ Agent turn hardened — user messages persisted early, auto-compact skips active tasks.
 - **2026-04-12** 🔒 Lark global domain support, Dream learns discovered skills, shell sandbox tightened.
