@@ -742,6 +742,9 @@ def gateway(
         memory_config=config.agents.defaults.memory,
     )
 
+    # Wire TaskTreeService so built-in command handlers can find it
+    agent._tasktree_service = tasktree_service
+
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
