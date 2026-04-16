@@ -21,7 +21,9 @@
 
 ## 📢 News
 
-- **2026-04-16** 🌳 **TaskTree v2** — complete rewrite with tree diagram output on completion, agent context awareness (the agent knows when TaskTree is running or waiting for input), multi-channel routing, user input injection via structured JSON, and busy rejection for concurrent submits. Try `/plantask <goal>` for complex multi-step tasks.
+- **2026-04-17** 🧠 **Memory Freshness** — AgeMem BM25 retrieval now weights freshness (7-day half-life decay) alongside relevance and importance. Retrieved memories show staleness labels (`[fresh]` / `[aging]` / `[stale?]` / `[stale!!]`). Legacy MEMORY.md injection shows the latest content date so the agent can judge expiry.
+- **2026-04-17** 🌳 **Spawn Governance** — subagent bidirectional channel: LLM can call `update_context(task_id, context)` to push mid-task corrections, `list_subagents()` to inspect running tasks, and `spawn` now returns a structured `task_id` for governance. `_MAX_INJECTION_CYCLES` raised from 5→15 so the agent stays responsive during long tool loops.
+- **2026-04-17** 🔍 **DiffFileTool** — line-level diff with optional `line_range` parameter. Compare any file against a baseline (`file:/path` or raw content string).
 - **2026-04-16** 🛡️ **Answer Sourcing** — agent now enforces tool use for code/factual questions. Responses without source citations are blocked or retried. `SourceTracingHook` + system prompt rules prevent fabricated answers.
 - **2026-04-14** 🚀 Released **v0.1.5.post1** — Dream skill discovery, mid-turn follow-up injection, WebSocket channel, and deeper channel integrations. Please see [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.5.post1) for details.
 - **2026-04-13** 🛡️ Agent turn hardened — user messages persisted early, auto-compact skips active tasks.
@@ -1936,6 +1938,26 @@ This is the key difference from passive memory: nanobot learns *when* to store m
 | **Access** | Agent reads files directly | Agent calls memory tools |
 
 Both systems coexist. Dream stores slow-changing knowledge; AgeMem handles fast-changing session context.
+
+### Memory Freshness
+
+AgeMem's `retrieve_memories` tool uses a **composite score** that weighs three signals:
+
+```
+relevance = 0.60 × BM25  +  0.25 × importance  +  0.15 × freshness
+```
+
+**Freshness** uses exponential decay with a **7-day half-life**: a memory from 7 days ago contributes half the freshness weight of one from today. Retrieved entries are labeled by age:
+
+| Label | Age | Meaning |
+|-------|-----|---------|
+| `[fresh]` | < 1 day | Trustworthy — recency bonus applies |
+| *(none)* | 1–3 days | Neutral |
+| `[aging]` | 3–7 days | Losing freshness |
+| `[stale?]` | 7–14 days | Likely outdated — verify before trusting |
+| `[stale!!]` | > 14 days | Treat as unreliable |
+
+The LLM can use these labels to decide whether to trust a memory or issue a fresh web search. Legacy `MEMORY.md` injection similarly annotates the latest entry timestamp so the agent can judge staleness of non-structured memory.
 
 ## 🌳 TaskTree (Hierarchical Planning)
 
