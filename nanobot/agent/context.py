@@ -3,7 +3,6 @@
 import base64
 import mimetypes
 import platform
-from datetime import datetime
 from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any
@@ -103,14 +102,12 @@ class ContextBuilder:
             # Legacy: full MEMORY.md injection (backward compat)
             memory_content = self.memory.read_memory()
             if memory_content and not self._is_template_content(memory_content, "memory/MEMORY.md"):
-                # Annotate with file modification time so LLM can judge freshness
-                mtime_ts = ""
-                try:
-                    mtime = self.memory.memory_file.stat().st_mtime
-                    mtime_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
-                    mtime_ts = f"\n\n> MEMORY.md 最后更新: {mtime_str}（内容可能已过期，请结合上方 AgeMem 记忆参考判断）"
-                except OSError:
-                    pass
+                # Extract most recent [YYYY-MM-DD] or [YYYY-MM-DD HH:MM] from content
+                latest_ts = self._extract_latest_timestamp(memory_content)
+                if latest_ts:
+                    mtime_ts = f"\n\n> MEMORY.md 最新记录: {latest_ts}（内容可能已过期，请结合上方 AgeMem 记忆参考判断）"
+                else:
+                    mtime_ts = ""
                 parts.append(f"# 记忆参考（仅供参考，可能有偏差）{mtime_ts}\n\n{memory_content}")
 
         always_skills = self.skills.get_always_skills()
@@ -189,6 +186,21 @@ class ContextBuilder:
                 parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
+
+    @staticmethod
+    def _extract_latest_timestamp(content: str) -> str | None:
+        """Extract the most recent date from MEMORY.md content.
+
+        Supports both bracketed entries [YYYY-MM-DD HH:MM] and markdown headings
+        #### YYYY-MM-DD so the LLM knows how stale the content is.
+        """
+        import re
+        # Match [YYYY-MM-DD HH:MM] or #### YYYY-MM-DD
+        timestamps = re.findall(r"(?:\[|#### )(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)", content)
+        if not timestamps:
+            return None
+        timestamps.sort(reverse=True)
+        return timestamps[0]
 
     @staticmethod
     def _is_template_content(content: str, template_path: str) -> bool:
