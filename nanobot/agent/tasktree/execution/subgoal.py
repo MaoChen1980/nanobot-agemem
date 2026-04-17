@@ -18,32 +18,66 @@ class SubgoalParser(Protocol):
 
 
 class LLMSubgoalParser:
-    """SubgoalParser backed by simple pattern matching + LLM fallback.
+    """SubgoalParser backed by structured extraction.
 
-    Primary strategy: look for structured markers like "[Subgoals]", numbered lists,
-    or JSON arrays in the result content.
+    Primary strategy: look for ## TASKS block (Claude Code style).
+    Fallback: numbered lists, markdown lists.
     """
 
     def parse(self, result: NodeResult) -> list[str]:
         """Extract child goals from result content."""
         content = result.summary
 
-        # Strategy 1: Look for JSON array
+        # Strategy 1: Extract ## TASKS block (strict, primary — Claude Code style)
+        goals = _try_parse_tasks_block(content)
+        if goals:
+            return goals
+
+        # Strategy 2: Look for bare JSON array (fallback — common in some models)
         goals = _try_parse_json_goals(content)
         if goals:
             return goals
 
-        # Strategy 2: Look for numbered list
+        # Strategy 3: Look for numbered list (fallback)
         goals = _try_parse_numbered_goals(content)
         if goals:
             return goals
 
-        # Strategy 3: Look for markdown list
+        # Strategy 4: Look for markdown list (fallback)
         goals = _try_parse_markdown_goals(content)
         if goals:
             return goals
 
         return []
+
+
+def _try_parse_tasks_block(content: str) -> list[str] | None:
+    """Extract goals from ## TASKS block (Claude Code style).
+
+    Format:
+        ## TASKS
+        [{"goal": "subtask title", "description": "why needed"}, ...]
+        ## TASKS
+
+    Everything outside the ## TASKS markers is ignored — including <think> blocks.
+    """
+    # Match ## TASKS ... ## TASKS (non-greedy, multiline)
+    match = re.search(r'## TASKS\s*([\s\S]*?)\s*## TASKS', content)
+    if not match:
+        return None
+    json_str = match.group(1).strip()
+    if not json_str:
+        return None
+    try:
+        parsed = json.loads(json_str)
+        if isinstance(parsed, list) and all(isinstance(x, dict) for x in parsed):
+            goals = [item.get("goal", "") for item in parsed]
+            goals = [g.strip() for g in goals if g.strip()]
+            if goals:
+                return goals
+    except json.JSONDecodeError:
+        pass
+    return None
 
 
 def _try_parse_json_goals(content: str) -> list[str] | None:

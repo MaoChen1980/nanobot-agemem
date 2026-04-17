@@ -161,22 +161,21 @@ def _build_task_block(
             "[/Root Planning Context]"
         )
         parts.append(
-            "[Decomposition Instruction]\n"
-            "You are the ROOT PLANNING NODE. After analyzing the Root Goal, you MUST either:\n"
-            "1. Output a structured list of subtasks (if the goal requires multiple steps), OR\n"
-            "2. Output a single line: DONE (if the goal is single-step and can be executed directly)\n"
+            "[TaskTree Decomposition — ONE-TIME OUTPUT]\n"
+            "Analyze the Root Goal and output exactly ONE of the following.\n"
+            "Do NOT include <think> or any thinking in your output.\n"
             "\n"
-            "Required output formats (choose ONE):\n"
-            "  JSON array:   [{\"goal\": \"subtask description\", \"description\": \"why needed\"}]\n"
-            "  Numbered list: \"1. First subtask\\n2. Second subtask\\n3. Third subtask\"\n"
-            "  Markdown list: \"- First subtask\\n- Second subtask\\n- Third subtask\"\n"
+            "## TASKS\n"
+            '[{"goal": "subtask title", "description": "why this subtask is needed"}]\n'
+            "## TASKS\n"
             "\n"
-            "IMPORTANT RULES:\n"
-            "  - Do NOT ask clarifying questions — if the goal is clear, decompose immediately\n"
-            "  - Do NOT execute the subtasks yourself — only plan them\n"
-            "  - Each subtask should be independently meaningful and achievable\n"
-            "  - Maximum subtasks per decomposition: 10\n"
-            "[/Decomposition Instruction]"
+            "RULES:\n"
+            "- Output ONLY the ## TASKS block above — no explanation, no code fences, no thinking\n"
+            "- If the goal is trivial and can be done in one step, output: ## TASKS\n[{\"goal\": \"完成 Root Goal\", \"description\": \"\"}]\n## TASKS\n"
+            "- Do NOT ask clarifying questions — if the goal is clear, decompose immediately\n"
+            "- Do NOT execute the subtasks yourself — only plan them\n"
+            "- Maximum subtasks: 5\n"
+            "[/TaskTree Decomposition]"
         )
 
     return "\n\n".join(parts)
