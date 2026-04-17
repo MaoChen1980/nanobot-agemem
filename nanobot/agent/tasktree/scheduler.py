@@ -298,11 +298,22 @@ class Scheduler:
 
         root_result = self._tree.get_root_result()
         if root_result is None:
-            root_result = NodeResult(
-                node_id="root",
-                summary="Task completed with no result",
-            )
-            self._tree.nodes["root"].result = root_result
+            # Root failed without setting a result — convert failure to NodeResult
+            root_node = self._tree.nodes.get(self._tree.root_id)
+            if root_node and root_node.failure:
+                root_result = NodeResult(
+                    node_id=self._tree.root_id,
+                    summary=f"[FAILED] {root_node.failure.summary}",
+                    constraints_respected=False,
+                    token_spent=0,
+                )
+                self._tree.nodes[self._tree.root_id].result = root_result
+            else:
+                root_result = NodeResult(
+                    node_id="root",
+                    summary="Task completed with no result",
+                )
+                self._tree.nodes["root"].result = root_result
 
         logger.info("Scheduler finished")
         return root_result
@@ -534,6 +545,33 @@ class Scheduler:
                 self._tree.mark_blocked(node.id)
                 if self.callbacks:
                     self.callbacks.on_node_blocked(node, failure)
+                await self._advance_path()
+                return False
+
+            # Root-level REPLAN: root has no parent, so it replans itself.
+            # Try REPLAN before marking permanently failed (unless replan exhausted).
+            if node.parent_id is None:
+                if node.replan_count >= self.config.replan_max:
+                    self._tree.mark_failed(node.id, failure)
+                    logger.debug("Root replan_max exhausted, root stays failed")
+                    if self.callbacks:
+                        self.callbacks.on_node_failed(node, failure)
+                else:
+                    node.replan_count += 1
+                    logger.info("Root failed (replan {}/{}), calling REPLAN", node.replan_count, self.config.replan_max)
+                    new_goals = await self._llm_replan(node, failure.summary)
+                    if new_goals:
+                        # REPLAN produced children — switch root to RUNNING and spawn them
+                        self._tree.mark_running(node.id)
+                        for goal in new_goals[:self.config.max_planning_children]:
+                            self._tree.add_child(node.id, goal)
+                        self._path_stack.append(node.children[0])
+                        self._save_checkpoint()
+                        return False
+                    # REPLAN returned nothing — mark permanently failed
+                    self._tree.mark_failed(node.id, failure)
+                    if self.callbacks:
+                        self.callbacks.on_node_failed(node, failure)
             else:
                 self._tree.mark_failed(node.id, failure)
                 logger.debug("Node {} failed: {}", node.id, failure.summary[:80])

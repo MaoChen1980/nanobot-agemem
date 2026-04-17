@@ -114,31 +114,16 @@ class DefaultExecutionAgent:
                 result.usage.get("prompt_tokens", 0) + result.usage.get("completion_tokens", 0)
             )
             tools_used = result.tools_used or []
+            raw_content = result.final_content or ""
 
-            # Non-root nodes must use tools to perform actual work.
-            # If no tools were called, the LLM just said "done" without acting —
-            # treat this as a failure so the parent can REPLAN with the context.
-            if node.parent_id is not None and not tools_used:
-                logger.warning(
-                    "ExecutionAgent: node {} ({}) used no tools. "
-                    "Failing so parent can REPLAN.",
-                    node.id,
-                    node.goal[:50],
-                )
-                return FailureReport(
-                    node_id=node.id,
-                    status=TaskStatus.FAILED,
-                    root_cause=RootCause.NO_REMAINING_OPTIONS,
-                    summary="No tools were used. The agent must use tools (e.g., write_file, exec) to complete the task.",
-                    constraint_veto=False,
-                    workspace_state=WorkspaceState.CLEAN,
-                )
+            # Parse children goals early so we know if node is a leaf before
+            # applying the no-tools check
+            from nanobot.agent.tasktree.execution.subgoal import _try_parse_tasks_block
+            children_goals = _try_parse_tasks_block(raw_content) or []
 
-            # Root node: if it claims no children (##[TASKS][]) and also used
-            # no tools, the LLM just gave up without doing anything — fail it.
-            # This is distinct from "empty tasks = trivial done" which would still
-            # use tools (create the file directly).
-            if node.parent_id is None and not tools_used:
+            # Root node without children and without tools: LLM gave up without
+            # doing anything. Fail it so REPLAN generates a proper plan.
+            if node.parent_id is None and not tools_used and not children_goals:
                 logger.warning(
                     "ExecutionAgent: root node {} used no tools and produced no children. "
                     "Failing so a concrete plan is generated.",
