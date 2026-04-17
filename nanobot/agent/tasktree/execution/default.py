@@ -134,6 +134,25 @@ class DefaultExecutionAgent:
                     workspace_state=WorkspaceState.CLEAN,
                 )
 
+            # Root node: if it claims no children (##[TASKS][]) and also used
+            # no tools, the LLM just gave up without doing anything — fail it.
+            # This is distinct from "empty tasks = trivial done" which would still
+            # use tools (create the file directly).
+            if node.parent_id is None and not tools_used:
+                logger.warning(
+                    "ExecutionAgent: root node {} used no tools and produced no children. "
+                    "Failing so a concrete plan is generated.",
+                    node.id,
+                )
+                return FailureReport(
+                    node_id=node.id,
+                    status=TaskStatus.FAILED,
+                    root_cause=RootCause.NO_REMAINING_OPTIONS,
+                    summary="Root node produced no children and used no tools. The agent must either decompose the goal into subtasks or execute it directly using tools.",
+                    constraint_veto=False,
+                    workspace_state=WorkspaceState.CLEAN,
+                )
+
             # Extract artifacts and detect workspace state
             artifacts, ws_state = self._extract_artifacts(result.messages)
 
