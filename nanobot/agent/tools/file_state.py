@@ -84,7 +84,12 @@ def check_read(path: str | Path) -> str | None:
 
 
 def is_unchanged(path: str | Path, offset: int = 1, limit: int | None = None) -> bool:
-    """Return True if file was previously read with same params and mtime is unchanged."""
+    """Return True if file was previously read with same params and content is unchanged.
+
+    Uses mtime as the primary check. When mtime matches, also verifies content hash
+    to handle Windows filesystem timestamp resolution issues where rapid writes
+    within the same second may not update mtime.
+    """
     p = str(Path(path).resolve())
     entry = _state.get(p)
     if entry is None:
@@ -97,7 +102,14 @@ def is_unchanged(path: str | Path, offset: int = 1, limit: int | None = None) ->
         current_mtime = os.path.getmtime(p)
     except OSError:
         return False
-    return current_mtime == entry.mtime
+    if current_mtime != entry.mtime:
+        return False
+    # mtime matched — verify content hash to handle Windows timestamp resolution
+    if entry.content_hash is not None:
+        current_hash = _hash_file(p)
+        if current_hash != entry.content_hash:
+            return False
+    return True
 
 
 def clear() -> None:

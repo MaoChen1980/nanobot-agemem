@@ -23,6 +23,7 @@ from nanobot.agent.tasktree.tree import TaskTree
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
+from nanobot.utils.helpers import estimate_message_tokens, estimate_prompt_tokens_chain
 
 if TYPE_CHECKING:
     from nanobot.agent.agemem.retriever import MemoryRetriever
@@ -65,16 +66,8 @@ class TaskTreeService:
         self._tasks: dict[str, asyncio.Task] = {}
         # chat_id → Scheduler (for status queries)
         self._schedulers: dict[str, Scheduler] = {}
-        # chat_id → asyncio.Event (for user input requests)
-        self._input_events: dict[str, asyncio.Event] = {}
-        # chat_id → user input result
-        self._input_results: dict[str, str] = {}
-        # chat_id → asyncio.Event (for pending task confirmations)
-        self._pending_confirms: dict[str, asyncio.Event] = {}
         # chat_id → channel (for routing outbound messages to correct channel)
         self._channels: dict[str, str] = {}
-        # chat_id → question text (persisted after event is consumed, cleared on task done)
-        self._waiting_questions: dict[str, str] = {}
 
     async def start(self) -> None:
         """Start the service."""
@@ -158,10 +151,6 @@ class TaskTreeService:
         task.cancel()
         self._tasks.pop(chat_id, None)
         self._schedulers.pop(chat_id, None)
-        # Clean up any pending input/confirm events and channel
-        self._input_events.pop(chat_id, None)
-        self._pending_confirms.pop(chat_id, None)
-        self._waiting_questions.pop(chat_id, None)
         self._channels.pop(chat_id, None)
         # Clear the checkpoint so the next submit starts fresh
         session_key = f"tasktree:{chat_id}"
@@ -224,13 +213,6 @@ class TaskTreeService:
         if task.done():
             return None
 
-        # If waiting for user input, show that first (more relevant)
-        if chat_id in self._waiting_questions:
-            question = self._waiting_questions[chat_id].replace("\n", " ").strip()
-            if len(question) > 60:
-                question = question[:57] + "..."
-            return f"⏸️ TaskTree 等待你的输入: {question}"
-
         scheduler = self._schedulers.get(chat_id)
         if scheduler is None:
             return None
@@ -245,115 +227,101 @@ class TaskTreeService:
             goal = goal[:47] + "..."
         return f"🔄 TaskTree 进行中: {goal}"
 
-    async def confirm_task(self, chat_id: str, raw_goal: str, channel: str, auto_confirm: bool = False) -> str | None:
-        """Ask the user to confirm/enrich a task goal via LLM paraphrase.
-
-        Returns the confirmed goal string, or None if the user cancelled.
-
-        Flow:
-          1. Ask LLM to paraphrase the goal into a structured description
-          2. Publish the paraphrase to the user via bus
-          3. Wait for user confirmation via _pending_confirms[chat_id]
-          4. Return confirmed goal or None if user said cancel
-        """
-        # Step 1: LLM paraphrase
-        paraphrase_prompt = f"""The user wants to accomplish this task:
-
-{raw_goal}
-
-Your job is to:
-1. Re-read and understand the task
-2. Rephrase it clearly and precisely in a structured format
-
-Output your paraphrased version in this format:
-[Task Summary]
-<one sentence summary of the goal>
-
-[Detailed Description]
-<detailed description of what success looks like, including any constraints or requirements mentioned or implied by the goal>
-
-Do NOT ask questions. Do NOT add new requirements. Only rephrase and clarify what was already stated.
-If the goal is already clear and specific, simply summarize it concisely."""
-
-        try:
-            messages = [{"role": "user", "content": paraphrase_prompt}]
-            response = await self.provider.chat(
-                messages=messages,
-                model=self.model,
-                max_tokens=512,
-            )
-            paraphrase = response.content if hasattr(response, "content") else str(response)
-        except Exception as e:
-            logger.warning("Failed to paraphrase goal: {}", e)
-            paraphrase = f"[Task Summary]\n{raw_goal}\n\n[Detailed Description]\n(LLM paraphrase unavailable)"
-
-        # Auto-confirm mode (non-interactive): skip confirmation prompt
-        if auto_confirm:
-            logger.info("TaskTree auto-confirm enabled, skipping user confirmation")
-            return paraphrase
-
-        # Step 2: Publish paraphrase and ask for confirmation
-        confirm_msg = (
-            "📋 任务确认\n\n"
-            f"{paraphrase}\n\n"
-            "请回复：\n"
-            "  - 直接回车确认任务\n"
-            "  - 或输入补充信息/修改\n"
-            "  - 或输入 /cancel 取消任务"
-        )
-        event = asyncio.Event()
-        self._pending_confirms[chat_id] = event
-        try:
-            await self.bus.publish_outbound(OutboundMessage(
-                channel=channel,
-                chat_id=chat_id,
-                content=confirm_msg,
-                metadata={"_tasktree_needs_input": True, "_task_id": chat_id},
-            ))
-
-            # Step 3: Wait for user response
-            await event.wait()
-            user_response = self._input_results.pop(chat_id, "").strip()
-        finally:
-            self._pending_confirms.pop(chat_id, None)
-
-        # Step 4: Handle response
-        if user_response.lower() in ("/cancel", "cancel", "取消"):
-            return None
-        if not user_response or user_response == "/confirm":
-            # User confirmed — use original paraphrase as the goal
-            return paraphrase
-        # User modified — use their version
-        return user_response
-
     def submit_user_input(self, chat_id: str, response: str) -> None:
-        """Called by AgentLoop when user responds to a pending input request."""
-        self._input_results[chat_id] = response
-        # Check _input_events (for request_user_input) and _pending_confirms (for confirm_task)
-        event = self._input_events.pop(chat_id, None)
-        if event is None:
-            event = self._pending_confirms.pop(chat_id, None)
-        if event is not None:
-            event.set()
+        """No-op. Kept for CLI compatibility."""
+        pass
 
     async def request_user_input(self, chat_id: str, question: str, channel: str) -> asyncio.Event:
-        """Called by ExecutionAgent when it needs user input.
+        """No-op. User input goes through //taskinfo command."""
+        return asyncio.Event()
 
-        Returns an Event that will be set when the user responds.
-        The caller should await event.wait() after calling this.
+    def find_wait_info_node(self, chat_id: str) -> tuple[str, str] | None:
+        """Find the WAIT_INFO node for chat_id.
+
+        Returns (node_id, question) if found, None otherwise.
         """
-        event = asyncio.Event()
-        self._input_events[chat_id] = event
-        # Persist question so agent context can show it while waiting
-        self._waiting_questions[chat_id] = question
-        # Publish the question to the user on the correct channel
-        await self.bus.publish_outbound(OutboundMessage(
-            channel=channel,
-            chat_id=chat_id,
-            content="🤔 需要你的介入：" + question,
-            metadata={"_tasktree_needs_input": True, "_task_id": chat_id},
-        ))
-        return event
+        scheduler = self._schedulers.get(chat_id)
+        if scheduler is None:
+            return None
+        tree = scheduler.get_tree()
+        if tree is None:
+            return None
+        for nid, node in tree.nodes.items():
+            if node.status.value == "wait_info":
+                question = ""
+                if node.result and node.result.user_input_question:
+                    question = node.result.user_input_question
+                return (nid, question)
+        return None
+
+    async def _submit_user_input_and_resume(self, chat_id: str, user_input: str) -> OutboundMessage | None:
+        """Submit user input for a WAIT_INFO node and resume the task.
+
+        Called by //taskinfo command handler.
+        Returns None if no WAIT_INFO node found.
+        """
+        wait_info = self.find_wait_info_node(chat_id)
+        if wait_info is None:
+            return None
+
+        node_id, question = wait_info
+        scheduler = self._schedulers.get(chat_id)
+        if scheduler is None:
+            return None
+
+        tree = scheduler.get_tree()
+        node = tree.nodes.get(node_id)
+        if node is None:
+            return None
+
+        # Fill in the user input
+        if node.result is None:
+            from nanobot.agent.tasktree.models import NodeResult, TaskStatus
+            node.result = NodeResult(node_id=node_id, status=TaskStatus.WAIT_INFO)
+        node.result.user_input_answer = user_input
+        # Clear user_input_question so re-execution doesn't trigger WAIT_INFO again
+        node.result.user_input_question = None
+        # Reset status to PENDING so scheduler executes it (not skips as WAIT_INFO)
+        node.status = node.status.__class__.PENDING
+
+        # Clear waiting question
+        self._waiting_questions.pop(chat_id, None)
+
+        logger.info("TaskTreeService: resuming with user input for chat_id={}, node={}", chat_id, node_id)
+
+        # Resume the scheduler
+        try:
+            root_result = await scheduler.run(scheduler._root_goal, resume_tree=tree)
+            tree = scheduler.get_tree()
+
+            # If still WAIT_INFO, don't complete
+            if root_result is None:
+                logger.info("TaskTreeService: still WAIT_INFO after resume, chat_id={}", chat_id)
+                return None
+
+            return self._build_response(root_result, tree, None)
+        except asyncio.CancelledError:
+            logger.info("TaskTreeService: cancelled during resume for chat_id={}", chat_id)
+            return None
+        except Exception as e:
+            logger.exception("TaskTreeService error during resume for chat_id={}", chat_id)
+            return OutboundMessage(
+                channel=self._channels.get(chat_id, "cli"),
+                chat_id=chat_id,
+                content=f"TaskTree 执行错误: {e}",
+                metadata={},
+            )
+        finally:
+            # Clean up if task is done
+            root_node = None
+            if self._schedulers.get(chat_id) is not None:
+                t = self._schedulers[chat_id].get_tree()
+                if t and t.root_id:
+                    root_node = t.nodes.get(t.root_id)
+            is_wait_info = root_node is not None and root_node.status.value == "wait_info"
+            if not is_wait_info:
+                self._schedulers.pop(chat_id, None)
+                self._channels.pop(chat_id, None)
 
     # -------------------------------------------------------------------------
     # Internal
@@ -368,27 +336,15 @@ If the goal is already clear and specific, simply summarize it concisely."""
         """Run a single task to completion and return the response.
 
         Does NOT publish to bus — caller is responsible for handling the response.
+
+        Returns None when:
+        - Task was cancelled
+        - WAIT_INFO reached (task remains in _schedulers for //taskinfo to resume)
         """
         task_goal = inbound.content
         session_key = f"tasktree:{inbound.chat_id}"
         self._channels[inbound.chat_id] = inbound.channel
         logger.info("TaskTreeService: starting task for chat_id={}", inbound.chat_id)
-
-        # Pre-execution confirmation (for new tasks, not resume)
-        if saved_tree is None:
-            confirmed_goal = await self.confirm_task(
-                inbound.chat_id, task_goal, inbound.channel,
-                auto_confirm=inbound.metadata.get("_tasktree_auto_confirm", False),
-            )
-            if confirmed_goal is None:
-                # User cancelled
-                return OutboundMessage(
-                    channel=inbound.channel,
-                    chat_id=inbound.chat_id,
-                    content="任务已取消",
-                    metadata=inbound.metadata,
-                )
-            task_goal = confirmed_goal
 
         scheduler = self._build_scheduler(session_key, inbound, session_cb)
         self._schedulers[inbound.chat_id] = scheduler
@@ -396,6 +352,13 @@ If the goal is already clear and specific, simply summarize it concisely."""
         try:
             root_result = await scheduler.run(task_goal, resume_tree=saved_tree)
             tree = scheduler.get_tree()
+
+            # None result means WAIT_INFO — don't complete the task yet
+            # Scheduler remains in _schedulers for //taskinfo to resume
+            if root_result is None:
+                logger.info("TaskTreeService: WAIT_INFO, awaiting //taskinfo for chat_id={}", inbound.chat_id)
+                return None
+
             return self._build_response(root_result, tree, inbound)
         except asyncio.CancelledError:
             logger.info("TaskTree cancelled mid-execution for chat_id={}", inbound.chat_id)
@@ -409,8 +372,17 @@ If the goal is already clear and specific, simply summarize it concisely."""
                 metadata=inbound.metadata,
             )
         finally:
-            self._schedulers.pop(inbound.chat_id, None)
-            self._channels.pop(inbound.chat_id, None)
+            # Only clean up if task is truly done (not WAIT_INFO)
+            # WAIT_INFO leaves scheduler in _schedulers for //taskinfo
+            root_node = None
+            if self._schedulers.get(inbound.chat_id) is not None:
+                tree = self._schedulers[inbound.chat_id].get_tree()
+                if tree and tree.root_id:
+                    root_node = tree.nodes.get(tree.root_id)
+            is_wait_info = root_node is not None and root_node.status.value == "wait_info"
+            if not is_wait_info:
+                self._schedulers.pop(inbound.chat_id, None)
+                self._channels.pop(inbound.chat_id, None)
 
         logger.info("TaskTreeService: task complete for chat_id={}", inbound.chat_id)
 
@@ -431,7 +403,7 @@ If the goal is already clear and specific, simply summarize it concisely."""
         constraint_agent = DefaultConstraintAgent(
             provider=self.provider,
             memory_retriever=self.memory_retriever,
-            config=DefaultConstraintAgentConfig(max_depth=1),  # cap at 5 nodes: root + 4 children
+            config=DefaultConstraintAgentConfig(max_depth=5),  # max tree depth: 5
         )
         verification_agent = LLMVerificationAgent(
             provider=self.provider,
@@ -443,12 +415,8 @@ If the goal is already clear and specific, simply summarize it concisely."""
         chat_id = inbound.chat_id
         channel = inbound.channel
         metadata = inbound.metadata
-        input_events = self._input_events
-        input_results = self._input_results
-        service = self  # for request_user_input
-
         class BusNotifierCallback(SchedulerCallbacks):
-            """Publishes progress events to bus + handles user input requests."""
+            """Publishes progress events to bus."""
 
             def _notify(self, emoji: str, node_id: str, text: str) -> None:
                 asyncio.create_task(bus.publish_outbound(OutboundMessage(
@@ -478,19 +446,14 @@ If the goal is already clear and specific, simply summarize it concisely."""
                 memory_cb.on_node_blocked(node, failure)
                 self._notify("🚫", node.id, f"被阻止: {failure.summary[:60]}")
 
-            async def on_user_input_request(self, question: str) -> str:
-                """Ask user a question and return their response."""
-                event = await service.request_user_input(chat_id, question, channel)
-                await event.wait()
-                return self._input_results.get(chat_id, "")
-
         return Scheduler(
-            config=SchedulerConfig(max_children=4),  # cap at 5 nodes: root + 4 children
+            config=SchedulerConfig(max_planning_children=5, max_depth=5),  # cap at 5 planning children, depth 5
             execution_agent=execution_agent,
             constraint_agent=constraint_agent,
             subgoal_parser=LLMSubgoalParser(),
             callbacks=BusNotifierCallback(),
             verification_agent=verification_agent,
+            provider=self.provider,
         )
 
     def _format_tree_status(self, tree: TaskTree) -> str:
@@ -509,11 +472,14 @@ If the goal is already clear and specific, simply summarize it concisely."""
                 return "🚫"
             elif node.status.value == "running":
                 return "🔄"
+            elif node.status.value == "wait_info":
+                return "⏸️"
+            elif node.status.value == "tried":
+                return "🔁"
             return "⏳"
 
         def summary(node) -> str:
-            text = node.goal.replace("\n", " ").strip()
-            return text[:50] + "..." if len(text) > 50 else text
+            return node.goal.replace("\n", " ").strip()
 
         root_icon = node_icon(root)
         lines = [f"📋 TaskTree 当前状态:\n└── {root_icon} {summary(root)}"]
@@ -562,6 +528,10 @@ If the goal is already clear and specific, simply summarize it concisely."""
                 return "🚫"
             elif node.status.value == "running":
                 return "🔄"
+            elif node.status.value == "wait_info":
+                return "⏸️"
+            elif node.status.value == "tried":
+                return "🔁"
             return "⏳"
 
         def render_node(node_id: str, prefix: str, is_last: bool) -> None:
@@ -573,8 +543,6 @@ If the goal is already clear and specific, simply summarize it concisely."""
             blank = prefix.replace("└── ", "    ").replace("├── ", "│   ")
 
             goal_text = node.goal.replace("\n", " ").strip()
-            if len(goal_text) > 60:
-                goal_text = goal_text[:57] + "..."
 
             lines.append(f"{prefix}{connector}{icon} {node.id}: {goal_text}")
 
@@ -594,8 +562,6 @@ If the goal is already clear and specific, simply summarize it concisely."""
 
         root = tree.nodes[tree.root_id]
         root_goal_text = root.goal.replace("\n", " ").strip()
-        if len(root_goal_text) > 60:
-            root_goal_text = root_goal_text[:57] + "..."
         lines.append(f"└── {node_icon(root)} {root.id}: {root_goal_text}")
 
         # Render root's children recursively with 4-space indent

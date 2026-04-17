@@ -887,6 +887,7 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
     monkeypatch.setattr("nanobot.cli.commands.sync_workspace_templates", lambda _path: None)
     monkeypatch.setattr("nanobot.cli.commands._make_provider", lambda _config: provider)
     monkeypatch.setattr("nanobot.bus.queue.MessageBus", lambda: bus)
+    monkeypatch.setattr("nanobot.bus.router.RouterBus", lambda: bus)
     monkeypatch.setattr("nanobot.session.manager.SessionManager", lambda _workspace: object())
 
     class _FakeCron:
@@ -1349,8 +1350,8 @@ async def test_tasktree_service_wires_routing_and_user_input(tmp_path: Path) -> 
     1. TaskTreeService can be instantiated with all dependencies
     2. RouterBus correctly routes TaskTree messages to TaskTreeService
     3. _tasktree_predicate correctly identifies TaskTree-bound messages
-    4. submit_user_input correctly stores results and sets events for both
-       _pending_confirms and _input_events paths
+    4. Service can be started and stopped
+    5. _channels tracks correct channel per chat
     """
     from nanobot.agent.context import ContextBuilder
     from nanobot.agent.tasktree.service import TaskTreeService
@@ -1425,45 +1426,11 @@ async def test_tasktree_service_wires_routing_and_user_input(tmp_path: Path) -> 
     msg3 = InboundMessage(sender_id="user3", chat_id="chat3", channel="cli", content="/plantask build a web app", metadata={})
     assert _tasktree_predicate(msg3) is False
 
-    # --- Test 2: submit_user_input for _pending_confirms ---
-    confirm_event = asyncio.Event()
-    tasktree_service._pending_confirms["chat_confirm"] = confirm_event
-    tasktree_service.submit_user_input("chat_confirm", "user response to confirm")
-    # Event should be set
-    assert confirm_event.is_set() is True
-    assert tasktree_service._input_results.get("chat_confirm") == "user response to confirm"
-    # Cleanup
-    tasktree_service._pending_confirms.pop("chat_confirm", None)
-    tasktree_service._input_results.pop("chat_confirm", None)
-
-    # --- Test 3: submit_user_input for _input_events ---
-    input_event = asyncio.Event()
-    tasktree_service._input_events["chat_input"] = input_event
-    tasktree_service.submit_user_input("chat_input", "user answer")
-    assert input_event.is_set() is True
-    assert tasktree_service._input_results.get("chat_input") == "user answer"
-    # Cleanup
-    tasktree_service._input_events.pop("chat_input", None)
-    tasktree_service._input_results.pop("chat_input", None)
-
-    # --- Test 4: Service can be started and stopped ---
+    # --- Test 2: Service can be started and stopped ---
     await tasktree_service.start()
     await tasktree_service.stop()
 
-    # --- Test 5: confirm_task with auto_confirm ---
-    confirmed = await tasktree_service.confirm_task(
-        chat_id="chat_auto",
-        raw_goal="test goal",
-        channel="cli",
-        auto_confirm=True,
-    )
-    # auto_confirm skips the LLM paraphrase and returns the paraphrase directly.
-    # With a fake provider returning "ok", the paraphrase is "[Task Summary]\ntest goal\n..."
-    assert confirmed is not None
-    # The paraphrase contains the goal
-    assert "test goal" in confirmed
-
-    # --- Test 6: _channels tracks correct channel ---
+    # --- Test 3: _channels tracks correct channel ---
     class _FakeOutbound:
         def __init__(self):
             self.messages: list[OutboundMessage] = []

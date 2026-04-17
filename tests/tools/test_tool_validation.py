@@ -545,24 +545,30 @@ async def test_exec_always_returns_exit_code() -> None:
     assert "hello" in result
 
 
-async def test_exec_head_tail_truncation() -> None:
+async def test_exec_head_tail_truncation(tmp_path) -> None:
     """Long output should preserve both head and tail."""
     tool = ExecTool()
     # Generate output that exceeds _MAX_OUTPUT (10_000 chars)
-    # Use current interpreter (PATH may not have `python`). ExecTool uses
-    # create_subprocess_shell: POSIX needs shlex.quote; Windows uses cmd.exe
-    # rules, so list2cmdline is appropriate there.
-    script = "print('A' * 6000 + '\\n' + 'B' * 6000)"
-    if sys.platform == "win32":
-        command = subprocess.list2cmdline([sys.executable, "-c", script])
-    else:
-        command = f"{shlex.quote(sys.executable)} -c {shlex.quote(script)}"
-    result = await tool.execute(command=command)
-    assert "chars truncated" in result
-    # Head portion should start with As
-    assert result.startswith("A")
-    # Tail portion should end with the exit code which comes after Bs
-    assert "Exit code:" in result
+    # Write script to temp file to avoid cmd.exe /c quote-nesting issues on Windows.
+    import tempfile
+    script = "print('A' * 6000 + chr(10) + 'B' * 6000)"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+        f.write(script)
+        script_path = f.name
+    try:
+        if sys.platform == "win32":
+            command = subprocess.list2cmdline([sys.executable, script_path])
+        else:
+            command = f"{shlex.quote(sys.executable)} {shlex.quote(script_path)}"
+        result = await tool.execute(command=command)
+        assert "chars truncated" in result
+        # Head portion should start with As
+        assert result.startswith("A")
+        # Tail portion should end with the exit code which comes after Bs
+        assert "Exit code:" in result
+    finally:
+        import os
+        os.unlink(script_path)
 
 
 async def test_exec_timeout_parameter() -> None:

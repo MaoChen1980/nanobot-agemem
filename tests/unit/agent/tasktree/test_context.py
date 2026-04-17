@@ -63,7 +63,7 @@ class TestBuildNodeContext:
         assert "[Root Goal]" in content
         assert "root goal" in content
         assert "[Your Task]" in content
-        assert "[Decomposition Instruction]" in content
+        assert "[TaskTree Decomposition —" in content
         # Root node should have rich planning context
         assert "[Root Planning Context]" in content
         assert "ROOT" in content

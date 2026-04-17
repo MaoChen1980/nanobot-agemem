@@ -16,6 +16,8 @@ class TaskStatus(str, Enum):
     DONE = "done"           # Completed successfully
     FAILED = "failed"       # Failed (after replan attempts exhausted)
     BLOCKED = "blocked"     # Blocked by constraint veto
+    TRIED = "tried"        # Known infeasible方案，已触发父节点 REPLAN，仅作上下文
+    WAIT_INFO = "wait_info"  # 需要用户输入才能继续
 
 
 class RootCause(str, Enum):
@@ -104,6 +106,7 @@ class NodeResult:
     workspace_state: WorkspaceState = WorkspaceState.CLEAN
     user_input_question: str | None = None  # If set, node needs user input before proceeding
     user_input_answer: str | None = None   # User's response to the question
+    children_goals: list[str] = field(default_factory=list)  # 子节点目标列表，从 ##[TASKS] 块解析
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -116,6 +119,7 @@ class NodeResult:
             "workspace_state": self.workspace_state.value,
             "user_input_question": self.user_input_question,
             "user_input_answer": self.user_input_answer,
+            "children_goals": self.children_goals,
         }
 
     @classmethod
@@ -130,6 +134,7 @@ class NodeResult:
             workspace_state=WorkspaceState(d.get("workspace_state", "clean")),
             user_input_question=d.get("user_input_question"),
             user_input_answer=d.get("user_input_answer"),
+            children_goals=d.get("children_goals", []),
         )
 
 

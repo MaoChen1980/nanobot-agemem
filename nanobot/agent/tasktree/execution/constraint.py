@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 class DefaultConstraintAgentConfig:
     """Configuration for DefaultConstraintAgent."""
 
-    max_depth: int = 1  # root + ≤4 children = 5 nodes max
+    max_depth: int = 5  # max tree depth: 5 levels
     forbidden_actions: list[str] | None = None
     failure_count_limit: int = 10  # N=10 as confirmed by user
 

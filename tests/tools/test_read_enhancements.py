@@ -1,5 +1,6 @@
 """Tests for ReadFileTool enhancements: description fix, read dedup, PDF support, device blacklist."""
 
+import sys
 import pytest
 
 from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool
@@ -171,6 +172,7 @@ class TestReadDeviceBlacklist:
         assert "Error" in result
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(sys.platform == "win32", reason="Symlinks require admin privileges on Windows and /dev/zero is Unix-specific")
     async def test_symlink_to_dev_zero_blocked(self, tmp_path):
         tool = ReadFileTool(workspace=tmp_path)
         link = tmp_path / "zero-link"

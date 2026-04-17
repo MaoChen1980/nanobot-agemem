@@ -944,41 +944,10 @@ def gateway(
             except asyncio.CancelledError:
                 break
 
-            # Intercept TaskTree user input replies before normal dispatch
-            # (both confirm_task and request_user_input store events here).
-            # But FIRST check if this is a priority command — priority commands
+            # Check if this is a priority command — priority commands
             # (/stop, /taskcancel, etc.) must not be treated as TaskTree goals.
             raw = msg.content.strip()
             if agent.commands.is_priority(raw):
-                # Still call submit_user_input to cancel any pending confirm
-                # wait AND dispatch the priority handler
-                if msg.chat_id in tasktree_service._pending_confirms:
-                    tasktree_service._pending_confirms.pop(msg.chat_id, None)
-                ctx = CommandContext(
-                    msg=msg, session=None, key=msg.session_key, raw=raw, loop=agent,
-                )
-                result = await agent.commands.dispatch_priority(ctx)
-                if result:
-                    await bus.publish_outbound(result)
-                continue
-
-            if msg.chat_id in tasktree_service._pending_confirms or msg.chat_id in tasktree_service._input_events:
-                tasktree_service.submit_user_input(msg.chat_id, msg.content)
-                continue
-                # Special handling for /plantask: submit to TaskTreeService
-                raw_lower = raw.lower()
-                if raw_lower.startswith("/plantask"):
-                    goal = raw[len("/plantask"):].strip()
-                    inbound = type(msg)(
-                        channel=msg.channel,
-                        sender_id=msg.sender_id,
-                        chat_id=msg.chat_id,
-                        content=goal,
-                        media=msg.media,
-                        metadata={**(dict(getattr(msg, "metadata", {}) or {})), "_tasktree_task": True},
-                    )
-                    await tasktree_service.submit(inbound)
-                    continue
                 ctx = CommandContext(
                     msg=msg, session=None, key=msg.session_key, raw=raw, loop=agent,
                 )
@@ -1328,18 +1297,6 @@ def _run_agent_interactive(
                     continue
                 if msg.metadata.get("_tasktree_progress"):
                     # TaskTree progress messages already shown by BusNotifierCallback._notify()
-                    continue
-
-                # TaskTree user input request: pause and wait for response
-                if msg.metadata.get("_tasktree_needs_input"):
-                    # Stop spinner and print the question
-                    if _thinking:
-                        _thinking.stop()
-                        _thinking = None
-                    console.print(f"\n{msg.content}")
-                    # Read user response synchronously (blocking, but this is the right UX)
-                    user_response = await _read_interactive_input_async()
-                    tasktree_service.submit_user_input(cli_chat_id, user_response)
                     continue
 
                 if msg.metadata.get("_progress"):

@@ -126,7 +126,8 @@ class TaskTree:
         node = self.nodes[node_id]
         node.status = TaskStatus.DONE
         node.result = result
-        node.workspace_state = result.workspace_state
+        if result and result.workspace_state is not None:
+            node.workspace_state = result.workspace_state
 
     def mark_failed(self, node_id: str, failure: FailureReport) -> None:
         """Mark a node as failed with its failure report."""
@@ -138,6 +139,11 @@ class TaskTree:
         """Mark a node as blocked (constraint veto)."""
         node = self.nodes[node_id]
         node.status = TaskStatus.BLOCKED
+
+    def mark_wait_info(self, node_id: str) -> None:
+        """Mark a node as waiting for user input."""
+        node = self.nodes[node_id]
+        node.status = TaskStatus.WAIT_INFO
 
     def mark_pending(self, node_id: str) -> None:
         """Reset a node to pending status for retry (after verification failure)."""

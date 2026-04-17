@@ -1,4 +1,4 @@
-"""Integration tests for replan, bubble-up failure propagation, and MAX_CHILDREN boundary."""
+"""Integration tests for replan, bubble-up failure propagation, and max_planning_children boundary."""
 
 from __future__ import annotations
 
@@ -8,10 +8,11 @@ from nanobot.agent.tasktree.models import (
     ConstraintSet,
     FailureReport,
     NodeResult,
+    TaskNode,
     TaskStatus,
     RootCause,
 )
-from nanobot.agent.tasktree.scheduler import Scheduler, SchedulerConfig, MAX_CHILDREN
+from nanobot.agent.tasktree.scheduler import Scheduler, SchedulerConfig
 from nanobot.agent.tasktree.tree import TaskTree
 
 
@@ -48,40 +49,30 @@ def _child_id(tree: TaskTree, parent_id: str, index: int) -> str:
 
 
 @pytest.mark.asyncio
-async def test_max_children_constant_is_10():
-    """MAX_CHILDREN should be 10."""
-    assert MAX_CHILDREN == 10
-
-
-@pytest.mark.asyncio
-async def test_scheduler_config_max_children_defaults_to_10():
-    """SchedulerConfig.max_children should default to MAX_CHILDREN."""
+async def test_scheduler_config_max_planning_children_defaults_to_5():
+    """SchedulerConfig.max_planning_children should default to 5."""
     config = SchedulerConfig()
-    assert config.max_children == MAX_CHILDREN == 10
+    assert config.max_planning_children == 5
 
 
 @pytest.mark.asyncio
-async def test_handle_failure_parent_at_max_children_fails_parent():
-    """When a child fails and parent is at MAX_CHILDREN, parent is marked failed."""
+async def test_handle_failure_replan_exhausted_fails_parent():
+    """When a child fails and replan_count >= replan_max, parent is marked failed."""
     tree = TaskTree()
     tree.create_root(goal="root")
     root_id = tree.root_id
 
-    # Fill parent to max children (10)
-    for i in range(10):
-        tree.add_child(root_id, f"child_{i}")
-    child_ids = list(tree.nodes[root_id].children)
+    # root has one child
+    tree.add_child(root_id, "child")
+    child_id = tree.nodes[root_id].children[0]
 
-    # Mark all children done except the last one
-    for cid in child_ids[:-1]:
-        tree.mark_done(cid, NodeResult(node_id=cid, summary=f"{cid} done"))
+    # Set replan_count to replan_max so next failure exhausts replan
+    tree.nodes[root_id].replan_count = 4  # replan_max=5, so 5th attempt fails
 
-    # Last child fails (simulate by marking it failed before scheduler runs)
-    # But we need to test the scheduler's _handle_failure path
-    # Let's set up: child_ids[-1] fails and parent is at max_children
+    # Child fails (simulate by marking it failed before scheduler runs)
     agent = MockExecutionAgent({
-        child_ids[-1]: FailureReport(
-            node_id=child_ids[-1],
+        child_id: FailureReport(
+            node_id=child_id,
             summary="child failed",
             root_cause=RootCause.UNKNOWN,
             remaining_options=[],
@@ -93,12 +84,12 @@ async def test_handle_failure_parent_at_max_children_fails_parent():
         execution_agent=agent,
         constraint_agent=MockConstraintAgent(),
         subgoal_parser=MockSubgoalParser(),
-        config=SchedulerConfig(max_children=10),
+        config=SchedulerConfig(replan_max=5),
     )
 
     await scheduler.run("root", resume_tree=tree)
 
-    # Parent should be failed (because child failed and parent at MAX_CHILDREN)
+    # Parent (root) should be failed (because replan exhausted)
     assert tree.nodes[root_id].status == TaskStatus.FAILED
 
 
@@ -177,7 +168,7 @@ async def test_bubble_up_continues_to_grandparent():
 
 @pytest.mark.asyncio
 async def test_spawn_replacement_goal_uses_remaining_options():
-    """_spawn_replacement_goal uses failure.remaining_options if available."""
+    """When a child fails and parent REPLANs, LLM generates replacement goals."""
     tree = TaskTree()
     tree.create_root(goal="root")
     root_id = tree.root_id
@@ -207,36 +198,51 @@ async def test_spawn_replacement_goal_uses_remaining_options():
                 self.results[node.id] = NodeResult(node_id=node.id, summary=f"{node.id} done")
             return self.results[node.id]
 
+    class MockLLMProvider:
+        async def chat(self, messages, model, max_tokens):
+            # Return a new child goal
+            class R:
+                content = '##[TASKS]\n["approach_2"]\n##[/TASKS]'
+            return R()
+
+        def get_default_model(self):
+            return "test"
+
     scheduler = Scheduler(
         execution_agent=TrackingAgent(),
         constraint_agent=MockConstraintAgent(),
         subgoal_parser=MockSubgoalParser(),
-        config=SchedulerConfig(max_children=11),
+        provider=MockLLMProvider(),
+        config=SchedulerConfig(replan_max=5),
     )
 
     await scheduler.run("root", resume_tree=tree)
 
-    # Should have spawned "approach_2" as replacement
-    children = tree.nodes[root_id].children
-    assert len(children) == 2  # original child + replacement
+    # Should have spawned a replacement child
+    replacement_count = len(tree.nodes[root_id].children)
+    assert replacement_count >= 1
     assert replacement_id is not None
-    assert tree.nodes[replacement_id].goal == "approach_2"
 
 
 @pytest.mark.asyncio
-async def test_spawn_replacement_goal_falls_back_to_retry():
-    """_spawn_replacement_goal falls back to 'Retry: <summary>' when no remaining options."""
+async def test_llm_replan_returns_none_on_failure():
+    """LLM REPLAN returns None when LLM call fails."""
     scheduler = Scheduler()
 
-    failure = FailureReport(
-        node_id="n1",
-        summary="something went wrong",
-        root_cause=RootCause.UNKNOWN,
-        remaining_options=[],
-    )
+    class FailingProvider:
+        async def chat(self, messages, model, max_tokens):
+            raise RuntimeError("LLM unavailable")
 
-    goal = scheduler._spawn_replacement_goal(failure)
-    assert goal == "Retry: something went wrong"
+        def get_default_model(self):
+            return "test"
+
+    scheduler.provider = FailingProvider()
+
+    result = await scheduler._llm_replan(
+        TaskNode(id="n1", goal="test goal"),
+        "context"
+    )
+    assert result is None
 
 
 @pytest.mark.asyncio

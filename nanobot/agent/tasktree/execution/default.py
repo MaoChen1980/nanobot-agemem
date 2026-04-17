@@ -97,18 +97,12 @@ class DefaultExecutionAgent:
                 chat_id=chat_id,
             )
 
-        # Choose hook: _UserInputInjectHook if service is available, otherwise _NoOpHook
-        _hook = _NoOpHook()
-        if self._tasktree_service is not None:
-            _hook = _UserInputInjectHook(self._tasktree_service, chat_id)
-
         spec = AgentRunSpec(
             initial_messages=messages,
             tools=self.tools,
             model=self._model,
             max_iterations=self.config.max_iterations,
             max_tool_result_chars=self.config.max_tool_result_chars,
-            hook=_hook,
         )
 
         try:

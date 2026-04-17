@@ -52,16 +52,44 @@ class LLMSubgoalParser:
 
 
 def _try_parse_tasks_block(content: str) -> list[str] | None:
-    """Extract goals from ## TASKS block (Claude Code style).
+    """Extract goals from ##[TASKS]...##[/TASKS] block.
 
     Format:
+        ##[TASKS]
+        ["goal 1", "goal 2", "goal 3"]
+        ##[/TASKS]
+
+    Also supports the legacy format:
         ## TASKS
-        [{"goal": "subtask title", "description": "why needed"}, ...]
+        [...]
         ## TASKS
 
-    Everything outside the ## TASKS markers is ignored — including <think> blocks.
+    Everything outside the markers is ignored — including <think> blocks.
     """
-    # Match ## TASKS ... ## TASKS (non-greedy, multiline)
+    # Match ##[TASKS] ... ##[/TASKS] (non-greedy, multiline)
+    match = re.search(r'##\[TASKS\]\s*([\s\S]*?)\s*##\[/TASKS\]', content)
+    if match:
+        json_str = match.group(1).strip()
+        if not json_str:
+            return None
+        try:
+            parsed = json.loads(json_str)
+            if isinstance(parsed, list):
+                if len(parsed) == 0:
+                    return []  # explicit empty = leaf node
+                if all(isinstance(x, str) for x in parsed):
+                    goals = [g.strip() for g in parsed if g.strip()]
+                    if goals:
+                        return goals
+                if all(isinstance(x, dict) for x in parsed):
+                    goals = [item.get("goal", "") for item in parsed]
+                    goals = [g.strip() for g in goals if g.strip()]
+                    if goals:
+                        return goals
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback: try legacy ## TASKS ... ## TASKS format
     match = re.search(r'## TASKS\s*([\s\S]*?)\s*## TASKS', content)
     if not match:
         return None
@@ -70,11 +98,21 @@ def _try_parse_tasks_block(content: str) -> list[str] | None:
         return None
     try:
         parsed = json.loads(json_str)
-        if isinstance(parsed, list) and all(isinstance(x, dict) for x in parsed):
-            goals = [item.get("goal", "") for item in parsed]
-            goals = [g.strip() for g in goals if g.strip()]
-            if goals:
-                return goals
+        if isinstance(parsed, list):
+            # Explicit empty array: ## TASKS [] ## TASKS means "no children (leaf node)"
+            if len(parsed) == 0:
+                return []  # Empty list = explicit "no subtasks"
+            # String array format: ["goal 1", "goal 2"]
+            if all(isinstance(x, str) for x in parsed):
+                goals = [g.strip() for g in parsed if g.strip()]
+                if goals:
+                    return goals
+            # Legacy dict format: [{"goal": "...", "description": "..."}]
+            if all(isinstance(x, dict) for x in parsed):
+                goals = [item.get("goal", "") for item in parsed]
+                goals = [g.strip() for g in goals if g.strip()]
+                if goals:
+                    return goals
     except json.JSONDecodeError:
         pass
     return None

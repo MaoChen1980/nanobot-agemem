@@ -11,6 +11,7 @@ Minimal-dependency principle:
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from nanobot.agent.tasktree.models import (
@@ -18,6 +19,7 @@ from nanobot.agent.tasktree.models import (
     NodeResult,
     TaskNode,
 )
+from nanobot.utils.helpers import strip_think
 
 if TYPE_CHECKING:
     from nanobot.agent.context import ContextBuilder
@@ -162,19 +164,22 @@ def _build_task_block(
         )
         parts.append(
             "[TaskTree Decomposition — ONE-TIME OUTPUT]\n"
-            "Analyze the Root Goal and output exactly ONE of the following.\n"
+            "Analyze the Root Goal and output subtasks.\n"
             "Do NOT include <think> or any thinking in your output.\n"
             "\n"
-            "## TASKS\n"
-            '[{"goal": "subtask title", "description": "why this subtask is needed"}]\n'
-            "## TASKS\n"
+            "Output ONLY this exact block:\n"
+            "```\n"
+            "##[TASKS]\n"
+            '["subtask 1", "subtask 2", "subtask 3"]\n'
+            "##[/TASKS]\n"
+            "```\n"
             "\n"
             "RULES:\n"
-            "- Output ONLY the ## TASKS block above — no explanation, no code fences, no thinking\n"
-            "- If the goal is trivial and can be done in one step, output: ## TASKS\n[{\"goal\": \"完成 Root Goal\", \"description\": \"\"}]\n## TASKS\n"
-            "- Do NOT ask clarifying questions — if the goal is clear, decompose immediately\n"
+            "- Output ONLY the ##[TASKS]...##[/TASKS] block — no explanation, no thinking\n"
+            "- If the goal is trivial and can be done in one step, output: ##[TASKS]\n[]\n##[/TASKS]\n"
+            "- Do NOT ask clarifying questions\n"
             "- Do NOT execute the subtasks yourself — only plan them\n"
-            "- Maximum subtasks: 5\n"
+            "- Maximum 5 subtasks\n"
             "[/TaskTree Decomposition]"
         )
 
@@ -215,12 +220,18 @@ def build_result_from_agent_response(
                 description=a.get("description", ""),
             ))
 
+    # Parse ##[TASKS] block from agent_content to extract children_goals
+    children_goals = _try_parse_tasks_block_for_result(agent_content)
+
+    # Strip ##[TASKS] block before building summary to avoid pollution
+    clean_content = _strip_tasks_block(agent_content)
+
     # Build summary: prefer artifact descriptions over raw LLM output.
     if artifact_objs:
         summary_parts = [a.description or f"{a.type}: {a.path}" for a in artifact_objs]
         summary = "; ".join(summary_parts[:5])  # cap at 5 artifacts
-    elif agent_content:
-        summary = _summarize_content(agent_content)
+    elif clean_content and clean_content.strip():
+        summary = _summarize_content(strip_think(clean_content))
     else:
         summary = "Task completed."
 
@@ -233,7 +244,57 @@ def build_result_from_agent_response(
         token_spent=token_spent,
         workspace_state=WorkspaceState(workspace_state),
         user_input_question=user_input_question,
+        children_goals=children_goals,
     )
+
+
+def _strip_tasks_block(text: str) -> str:
+    """Remove ##[TASKS]...##[/TASKS] blocks from text, preserving outside content."""
+    text = re.sub(r'##\[TASKS\]\s*[\s\S]*?\s*##\[/TASKS\]', '', text)
+    text = re.sub(r'## TASKS\s*[\s\S]*?\s*## TASKS', '', text)
+    return text.strip()
+
+
+def _try_parse_tasks_block_for_result(content: str) -> list[str]:
+    """Extract children goals from ##[TASKS]...##[/TASKS] block.
+
+    Returns list of child goal strings, or empty list if no block found.
+    """
+    import json
+
+    # Try ##[TASKS]...##[/TASKS] format
+    match = re.search(r'##\[TASKS\]\s*([\s\S]*?)\s*##\[/TASKS\]', content)
+    if match:
+        json_str = match.group(1).strip()
+        if not json_str:
+            return []
+        try:
+            parsed = json.loads(json_str)
+            if isinstance(parsed, list) and len(parsed) > 0:
+                if all(isinstance(x, str) for x in parsed):
+                    return [g.strip() for g in parsed if g.strip()]
+                if all(isinstance(x, dict) for x in parsed):
+                    return [item.get("goal", "").strip() for item in parsed if item.get("goal", "").strip()]
+        except json.JSONDecodeError:
+            pass
+
+    # Try legacy ## TASKS...## TASKS format
+    match = re.search(r'## TASKS\s*([\s\S]*?)\s*## TASKS', content)
+    if match:
+        json_str = match.group(1).strip()
+        if not json_str:
+            return []
+        try:
+            parsed = json.loads(json_str)
+            if isinstance(parsed, list) and len(parsed) > 0:
+                if all(isinstance(x, str) for x in parsed):
+                    return [g.strip() for g in parsed if g.strip()]
+                if all(isinstance(x, dict) for x in parsed):
+                    return [item.get("goal", "").strip() for item in parsed if item.get("goal", "").strip()]
+        except json.JSONDecodeError:
+            pass
+
+    return []
 
 
 def build_failure_from_error(

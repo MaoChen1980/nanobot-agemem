@@ -119,6 +119,58 @@ async def cmd_taskcancel(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+async def cmd_taskinfo(ctx: CommandContext) -> OutboundMessage:
+    """Submit user input for a WAIT_INFO TaskTree node. Usage: //taskinfo <信息>"""
+    loop = ctx.loop
+    msg = ctx.msg
+    tasktree = getattr(loop, "_tasktree_service", None)
+    if tasktree is None:
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content="TaskTree service not available.",
+            metadata=dict(msg.metadata or {}),
+        )
+
+    # Extract user input from command
+    user_input = msg.content
+    # Remove the command prefix
+    for prefix in ["/taskinfo", "//taskinfo"]:
+        if user_input.startswith(prefix):
+            user_input = user_input[len(prefix):].strip()
+            break
+
+    if not user_input:
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content="用法: //taskinfo <信息>\n例如: //taskinfo 请帮我添加登录功能",
+            metadata=dict(msg.metadata or {}),
+        )
+
+    # Check if there's a WAIT_INFO node
+    wait_info = tasktree.find_wait_info_node(msg.chat_id)
+    if wait_info is None:
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content="没有正在等待输入的 TaskTree 节点",
+            metadata=dict(msg.metadata or {}),
+        )
+
+    node_id, question = wait_info
+    logger.info("TaskTree //taskinfo: node={}, question={}", node_id, question[:50])
+
+    # Submit input and resume
+    result = await tasktree._submit_user_input_and_resume(msg.chat_id, user_input)
+    if result is None:
+        # Task still waiting for more input or cancelled
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content="已收到信息，正在继续执行...",
+            metadata=dict(msg.metadata or {}),
+        )
+
+    return result
+
+
 async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
     """Restart the process in-place via os.execv."""
     msg = ctx.msg
@@ -415,6 +467,7 @@ def build_help_text() -> str:
         "/plantask <goal> — Submit a TaskTree goal (background)",
         "/taskstatus — Check TaskTree status",
         "/taskcancel — Cancel TaskTree task",
+        "//taskinfo <信息> — Provide input to TaskTree",
         "/restart — Restart the bot",
         "/status — Show bot status",
         "/dream — Manually trigger Dream consolidation",
@@ -434,6 +487,7 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority_prefix("/plantask", cmd_plantask)
     router.priority("/taskstatus", cmd_taskstatus)
     router.priority("/taskcancel", cmd_taskcancel)
+    router.priority_prefix("//taskinfo", cmd_taskinfo)
     router.exact("/new", cmd_new)
     router.exact("/status", cmd_status)
     router.exact("/dream", cmd_dream)
