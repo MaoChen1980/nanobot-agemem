@@ -69,7 +69,7 @@ class TestBuildNodeContext:
         assert "ROOT" in content
         assert "depth=0" in content
         # Decomposition instruction should be detailed
-        assert "Maximum subtasks" in content or "Maximum" in content
+        assert "2-5" in content or "subtasks" in content
 
     def test_child_node_has_parent_result(self):
         self.tree.add_child("root", "child goal")

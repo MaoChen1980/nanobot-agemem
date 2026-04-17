@@ -52,7 +52,23 @@ def build_node_context(
         A message list ready for AgentRunSpec.initial_messages.
     """
     # 1. Build the system prompt via ContextBuilder
-    system_prompt = context_builder.build_system_prompt(channel=channel)
+    # For TaskTree root nodes, we use a minimal planning-focused system prompt
+    # that overrides the nanobot helpful assistant personality.
+    if node.parent_id is None:
+        # Minimal planning-only system prompt for root decomposition
+        system_prompt = (
+            "You are a task planning assistant. Your ONLY job is to decompose goals into subtasks.\n"
+            "RULES:\n"
+            "1. Output ONLY a ##[TASKS]...##[/TASKS] block in your response\n"
+            "2. Never give explanations, refusals, or suggestions — ONLY output the TASKS block\n"
+            "3. If you cannot do something directly, decompose it into subtasks that CAN be done\n"
+            "4. Do NOT use tools. Do NOT try to act. Only output TASKS block.\n"
+            "5. Format: ##[TASKS][\"subtask 1\", \"subtask 2\", \"subtask 3\"]##[/TASKS]\n"
+            "6. Always provide at least one subtask — never output empty []\n"
+            "7. If user asks for something impossible, STILL output subtasks for what CAN be done\n"
+        )
+    else:
+        system_prompt = context_builder.build_system_prompt(channel=channel)
 
     # 2. Root node: retrieve relevant memories (tagged as imperfect reference)
     if node.parent_id is None:
@@ -153,6 +169,20 @@ def _build_task_block(
             f"[/Previous Attempt Failed]"
         )
 
+    # --- User input request (for all non-root nodes) ---
+    # Root nodes use the TaskTree Decomposition block below instead.
+    if node.parent_id is not None:
+        parts.append(
+            "[User Input — Optional]\n"
+            "If you need information from the user to complete this task, you may ask.\n"
+            "Format: output a JSON object starting with { and include a field:\n"
+            '{"summary": "brief description of what you did", "user_input_request": "the question you need answered"}\n'
+            "Example:\n"
+            '{"summary": "Checking flight options", "user_input_request": "What city are you flying from and to?"}\n'
+            "Or in plain text: include [USER_INPUT_REQUEST]Your question here[/USER_INPUT_REQUEST]\n"
+            "[/User Input]"
+        )
+
     # --- Root node: force structured decomposition output ---
     if node.parent_id is None:
         parts.append(
@@ -163,23 +193,37 @@ def _build_task_block(
             "[/Root Planning Context]"
         )
         parts.append(
-            "[TaskTree Decomposition — ONE-TIME OUTPUT]\n"
-            "Analyze the Root Goal and output subtasks.\n"
-            "Do NOT include <think> or any thinking in your output.\n"
+            "[TaskTree Decomposition — MANDATORY OUTPUT]\n"
+            "You are in TASK PLANNING MODE. Your ONLY job is to decompose goals into subtasks.\n"
+            "You MUST output a ##[TASKS]...##[/TASKS] block — this is mandatory, not optional.\n"
             "\n"
-            "Output ONLY this exact block:\n"
+            "MANDATORY RULES:\n"
+            "1. You MUST output a ##[TASKS]...##[/TASKS] block for EVERY goal, no exceptions\n"
+            "2. If you cannot do something directly, your ONLY option is to output subtasks\n"
+            "3. NEVER give direct answers, explanations, or refusals — only output TASKS blocks\n"
+            "4. If you say 'I cannot do X', you MUST still provide subtasks for how to accomplish X\n"
+            "\n"
+            "Example 1 (goal is achievable):\n"
+            'Goal: "Write a calculator app"\n'
+            'Output: ##[TASKS]["Write calculator Python file", "Test calculator", "Verify file exists"]##[/TASKS]\n'
+            "\n"
+            "Example 2 (goal seems impossible):\n"
+            'Goal: "Book a flight" (no API available)\n'
+            'Output: ##[TASKS]["Search for flights online", "Ask user for travel date and preferences", "Show search results to user", "Guide user to booking platform"]##[/TASKS]\n'
+            "\n"
+            "Example 3 (goal needs user input):\n"
+            'Goal: "Book a flight from Beijing to Shanghai"\n'
+            'Output: ##[TASKS][{"goal": "Book flight from Beijing to Shanghai", "user_input_request": "What date do you want to fly?"}]##[/TASKS]\n'
+            "\n"
+            "Output ONLY this exact block format:\n"
             "```\n"
             "##[TASKS]\n"
             '["subtask 1", "subtask 2", "subtask 3"]\n'
             "##[/TASKS]\n"
             "```\n"
             "\n"
-            "RULES:\n"
-            "- Output ONLY the ##[TASKS]...##[/TASKS] block — no explanation, no thinking\n"
-            "- If the goal is trivial and can be done in one step, output: ##[TASKS]\n[]\n##[/TASKS]\n"
-            "- Do NOT ask clarifying questions\n"
-            "- Do NOT execute the subtasks yourself — only plan them\n"
-            "- Maximum 5 subtasks\n"
+            "Do NOT output anything else. Do NOT explain. Do NOT refuse.\n"
+            "If you do not output a ##[TASKS]...##[/TASKS] block, the system will treat this as a failure.\n"
             "[/TaskTree Decomposition]"
         )
 
