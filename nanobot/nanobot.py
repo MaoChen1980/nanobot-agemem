@@ -113,7 +113,7 @@ class Nanobot:
             content = getattr(msg, "content", "") or ""
             metadata = getattr(msg, "metadata", {}) or {}
             return (
-                content.strip().startswith("/plantask")
+                content.strip().startswith("/taskplan")
                 or bool(metadata.get("_tasktree_task"))
             )
 

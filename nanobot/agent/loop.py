@@ -35,7 +35,7 @@ from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.update_context import UpdateContextTool
 from nanobot.agent.tools.list_subagents import ListSubagentsTool
-from nanobot.agent.tools.tasktree_tools import PlantaskTool, TaskStatusTool, TaskCancelTool
+from nanobot.agent.tools.tasktree_tools import TaskplanTool, TaskStatusTool, TaskCancelTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
 from nanobot.agent.tools.memory import (
     AddMemoryTool,
@@ -322,7 +322,7 @@ class AgentLoop:
         self.tools.register(UpdateContextTool(manager=self.subagents))
         self.tools.register(ListSubagentsTool(manager=self.subagents))
         if self._tasktree_service:
-            self.tools.register(PlantaskTool(tasktree_service=self._tasktree_service))
+            self.tools.register(TaskplanTool(tasktree_service=self._tasktree_service))
             self.tools.register(TaskStatusTool(tasktree_service=self._tasktree_service))
             self.tools.register(TaskCancelTool(tasktree_service=self._tasktree_service))
         if self.cron_service:
@@ -672,7 +672,7 @@ class AgentLoop:
         pending_queue: asyncio.Queue | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
-        # Priority commands (e.g. /plantask) are handled here for process_direct mode
+        # Priority commands (e.g. /taskplan) are handled here for process_direct mode
         raw = msg.content.strip()
         is_prio = self.commands.is_priority(raw)
         if is_prio:

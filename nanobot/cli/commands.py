@@ -710,8 +710,8 @@ def gateway(
     def _tasktree_predicate(msg: Any) -> bool:
         content = getattr(msg, "content", "") or ""
         metadata = getattr(msg, "metadata", {}) or {}
-        # Priority commands like /plantask are handled in _agent_gateway_runner
-        if content.strip().lower().startswith("/plantask "):
+        # Priority commands like /taskplan are handled in _agent_gateway_runner
+        if content.strip().lower().startswith("/taskplan "):
             return False
         return bool(metadata.get("_tasktree_task"))
 
@@ -1024,7 +1024,7 @@ def agent(
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nanobot runtime logs during chat"),
 ):
-    """Interact with the agent directly. Use /plantask <goal> to run a TaskTree."""
+    """Interact with the agent directly. Use /taskplan <goal> to run a TaskTree."""
     from loguru import logger
 
     from nanobot.agent.loop import AgentLoop
@@ -1067,9 +1067,9 @@ def agent(
     # Single message mode
     if message:
         msg_stripped = message.strip()
-        if msg_stripped.lower().startswith("/plantask "):
+        if msg_stripped.lower().startswith("/taskplan "):
             # TaskTree mode: submit and wait for completion
-            async def run_plantask():
+            async def run_taskplan():
                 import sys
                 router = RouterBus()
                 tasktree_service = TaskTreeService(
@@ -1085,10 +1085,10 @@ def agent(
                 await router.start_router()
                 await tasktree_service.start()
 
-                # Parse goal: "/plantask " followed by the actual goal (case-insensitive prefix)
-                goal = msg_stripped[len("/plantask"):].strip()  # handles "/plantask " prefix
+                # Parse goal: "/taskplan " followed by the actual goal (case-insensitive prefix)
+                goal = msg_stripped[len("/taskplan"):].strip()  # handles "/taskplan " prefix
                 if not goal:
-                    console.print("[yellow]/plantask requires a goal argument[/yellow]")
+                    console.print("[yellow]/taskplan requires a goal argument[/yellow]")
                     return
 
                 from nanobot.bus.events import InboundMessage, OutboundMessage
@@ -1126,7 +1126,7 @@ def agent(
                 await tasktree_service.stop()
                 await router.stop_router()
 
-            asyncio.run(run_plantask())
+            asyncio.run(run_taskplan())
             return
 
         # Regular single message — use AgentLoop directly
@@ -1236,7 +1236,7 @@ def _run_agent_interactive(
         content = getattr(msg, "content", "") or ""
         metadata = getattr(msg, "metadata", {}) or {}
         return (
-            content.strip().startswith("/plantask")
+            content.strip().startswith("/taskplan")
             or bool(metadata.get("_tasktree_task"))
         )
 

@@ -154,7 +154,7 @@ This file documents non-obvious constraints and usage patterns.
 - Use the `media` parameter with file paths to attach files
 - Do NOT use read_file to send files — that only reads content for your own analysis
 
-## plantask — Submit a TaskTree Goal
+## taskplan — Submit a TaskTree Goal
 
 - Submit a complex multi-step task to TaskTree for background planning and execution
 - Use for tasks that benefit from automatic decomposition
@@ -167,7 +167,7 @@ This file documents non-obvious constraints and usage patterns.
 
 - Get the current status of the running TaskTree task
 - Returns progress, completed steps, and any pending user questions
-- Works on the same session as the `plantask` that started the task
+- Works on the same session as the `taskplan` that started the task
 
 ## taskcancel — Cancel TaskTree Task
 

@@ -33,25 +33,25 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     )
 
 
-async def cmd_plantask(ctx: CommandContext) -> OutboundMessage | None:
+async def cmd_taskplan(ctx: CommandContext) -> OutboundMessage | None:
     """Submit a goal to TaskTree for background execution."""
     loop = ctx.loop
     msg = ctx.msg
     raw = ctx.raw
     raw_lower = raw.lower()
-    # Support both /plantask and /plantask! (auto-confirm)
-    if not raw_lower.startswith("/plantask"):
+    # Support both /taskplan and /taskplan! (auto-confirm)
+    if not raw_lower.startswith("/taskplan"):
         return None
-    auto_confirm = raw_lower.startswith("/plantask!")
+    auto_confirm = raw_lower.startswith("/taskplan!")
     # Extract goal, stripping command prefix and leading whitespace
-    cmd_len = len("/plantask!")
+    cmd_len = len("/taskplan!")
     if not auto_confirm:
-        cmd_len = len("/plantask")
+        cmd_len = len("/taskplan")
     goal = raw[cmd_len:].strip()
     if not goal:
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id,
-            content="Usage: /plantask <goal>  or  /plantask! <goal> (auto-confirm)",
+            content="Usage: /taskplan <goal>  or  /taskplan! <goal> (auto-confirm)",
             metadata=dict(msg.metadata or {}),
         )
     tasktree = getattr(loop, "_tasktree_service", None)
@@ -464,7 +464,7 @@ def build_help_text() -> str:
         "🐈 nanobot commands:",
         "/new — Start a new conversation",
         "/stop — Stop the current task",
-        "/plantask <goal> — Submit a TaskTree goal (background)",
+        "/taskplan <goal> — Submit a TaskTree goal (background)",
         "/taskstatus — Check TaskTree status",
         "/taskcancel — Cancel TaskTree task",
         "//taskinfo <信息> — Provide input to TaskTree",
@@ -483,8 +483,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/stop", cmd_stop)
     router.priority("/restart", cmd_restart)
     router.priority("/status", cmd_status)
-    router.priority_prefix("/plantask!", cmd_plantask)
-    router.priority_prefix("/plantask", cmd_plantask)
+    router.priority_prefix("/taskplan!", cmd_taskplan)
+    router.priority_prefix("/taskplan", cmd_taskplan)
     router.priority("/taskstatus", cmd_taskstatus)
     router.priority("/taskcancel", cmd_taskcancel)
     router.priority_prefix("//taskinfo", cmd_taskinfo)

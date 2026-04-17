@@ -51,7 +51,7 @@ class CommandRouter:
         """Register a prefix command that is checked as priority (before lock, before routing).
 
         Unlike normal prefix commands, priority_prefix commands are handled before
-        the dispatch lock is acquired — useful for commands like /plantask that
+        the dispatch lock is acquired — useful for commands like /taskplan that
         should be universal and lightweight.
         """
         self._priority_prefix.append((pfx, handler))

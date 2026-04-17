@@ -1403,8 +1403,8 @@ async def test_tasktree_service_wires_routing_and_user_input(tmp_path: Path) -> 
     def _tasktree_predicate(msg) -> bool:
         content = getattr(msg, "content", "") or ""
         metadata = getattr(msg, "metadata", {}) or {}
-        # Priority commands like /plantask are handled elsewhere
-        if content.strip().lower().startswith("/plantask "):
+        # Priority commands like /taskplan are handled elsewhere
+        if content.strip().lower().startswith("/taskplan "):
             return False
         return bool(metadata.get("_tasktree_task"))
 
@@ -1422,8 +1422,8 @@ async def test_tasktree_service_wires_routing_and_user_input(tmp_path: Path) -> 
     # Non-TaskTree message
     msg2 = InboundMessage(sender_id="user2", chat_id="chat2", channel="cli", content="hello", metadata={})
     assert _tasktree_predicate(msg2) is False
-    # /plantask is not routed to TaskTree
-    msg3 = InboundMessage(sender_id="user3", chat_id="chat3", channel="cli", content="/plantask build a web app", metadata={})
+    # /taskplan is not routed to TaskTree
+    msg3 = InboundMessage(sender_id="user3", chat_id="chat3", channel="cli", content="/taskplan build a web app", metadata={})
     assert _tasktree_predicate(msg3) is False
 
     # --- Test 2: Service can be started and stopped ---
@@ -1465,7 +1465,7 @@ async def test_tasktree_service_wires_routing_and_user_input(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_tasktree_submit_rejects_when_busy(tmp_path: Path) -> None:
-    """When a TaskTree is already running, a new /plantask submission is rejected."""
+    """When a TaskTree is already running, a new /taskplan submission is rejected."""
     from nanobot.agent.tasktree.service import TaskTreeService
     from nanobot.agent.tasktree.tree import TaskTree
     from nanobot.agent.tasktree.models import NodeResult

@@ -39,10 +39,10 @@ class MockConstraintAgent:
 
 
 @pytest.mark.asyncio
-async def test_router_bus_routes_plantask_to_tasktree():
-    """RouterBus routes /plantask messages to TaskTreeService queue."""
+async def test_router_bus_routes_taskplan_to_tasktree():
+    """RouterBus routes /taskplan messages to TaskTreeService queue."""
     bus = RouterBus()
-    tasktree_queue = bus.register_route("tasktree", lambda m: m.content.startswith("/plantask"))
+    tasktree_queue = bus.register_route("tasktree", lambda m: m.content.startswith("/taskplan"))
 
     await bus.start_router()
     try:
@@ -50,23 +50,23 @@ async def test_router_bus_routes_plantask_to_tasktree():
             channel="cli",
             sender_id="user",
             chat_id="c1",
-            content="/plantask build a bot",
+            content="/taskplan build a bot",
         ))
 
         await asyncio.sleep(0.1)
 
         msg = await asyncio.wait_for(tasktree_queue.get(), timeout=2.0)
-        assert msg.content == "/plantask build a bot"
+        assert msg.content == "/taskplan build a bot"
         assert msg.metadata.get("_tasktree_task", False) is not True
     finally:
         await bus.stop_router()
 
 
 @pytest.mark.asyncio
-async def test_router_bus_non_plantask_to_default():
-    """Non-/plantask messages go to the default queue for AgentLoop."""
+async def test_router_bus_non_taskplan_to_default():
+    """Non-/taskplan messages go to the default queue for AgentLoop."""
     bus = RouterBus()
-    bus.register_route("tasktree", lambda m: m.content.startswith("/plantask"))
+    bus.register_route("tasktree", lambda m: m.content.startswith("/taskplan"))
 
     await bus.start_router()
     try:

@@ -12,7 +12,7 @@ from nanobot.agent.tools.schema import StringSchema, tool_parameters_schema
         required=["goal"],
     )
 )
-class PlantaskTool(Tool):
+class TaskplanTool(Tool):
     """Submit a goal to TaskTree for background hierarchical execution."""
 
     def __init__(self, tasktree_service: Any):
@@ -20,7 +20,7 @@ class PlantaskTool(Tool):
 
     @property
     def name(self) -> str:
-        return "plantask"
+        return "taskplan"
 
     @property
     def description(self) -> str:
