@@ -349,6 +349,17 @@ class TaskTreeService:
             # Scheduler remains in _schedulers for //taskinfo to resume
             if root_result is None:
                 logger.info("TaskTreeService: WAIT_INFO, awaiting //taskinfo for chat_id={}", inbound.chat_id)
+                # Find the WAIT_INFO node and notify the user
+                wait_info = self.find_wait_info_node(inbound.chat_id)
+                if wait_info:
+                    node_id, question = wait_info
+                    if question:
+                        await self.bus.publish_outbound(OutboundMessage(
+                            channel=inbound.channel,
+                            chat_id=inbound.chat_id,
+                            content=f"⏸️ [{node_id}] 需要信息:\n{question}\n\n请回复 //taskinfo <你的回答>",
+                            metadata={"_tasktree_wait_info": True},
+                        ))
                 return None
 
             return self._build_response(root_result, tree, inbound)
@@ -410,9 +421,18 @@ class TaskTreeService:
         class BusNotifierCallback(SchedulerCallbacks):
             """Publishes progress events to session and memory only.
 
-            No direct bus messages during execution — the final result
+            No direct bus messages during normal execution — the final result
             is sent via _build_response when the scheduler finishes.
+            Only WAIT_INFO nodes send a bus notification to prompt the user.
             """
+
+            def _notify(self, emoji: str, node_id: str, text: str) -> None:
+                asyncio.create_task(bus.publish_outbound(OutboundMessage(
+                    channel=channel,
+                    chat_id=chat_id,
+                    content=f"{emoji} [{node_id}] {text}",
+                    metadata={**(metadata or {}), "_tasktree_progress": True},
+                )))
 
             def on_node_start(self, node: TaskNode) -> None:
                 session_cb.on_node_start(node)
