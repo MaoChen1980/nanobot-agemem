@@ -152,14 +152,14 @@ class TaskTreeService:
         self._tasks.pop(chat_id, None)
         self._schedulers.pop(chat_id, None)
         self._channels.pop(chat_id, None)
-        # Clear the checkpoint so the next submit starts fresh
+        # Clear checkpoint and session messages so the next submit starts fresh
         session_key = f"tasktree:{chat_id}"
         try:
             session_cb = SessionPersistenceCallback(
                 session_manager=self.session_manager,
                 session_key=session_key,
             )
-            session_cb.clear_checkpoint()
+            session_cb.clear_session()
         except Exception:
             pass
         # Notify cancellation on the correct channel
@@ -182,25 +182,17 @@ class TaskTreeService:
                 return status
             return f"🔄 TaskTree 任务运行中 (chat_id={chat_id})"
 
+        # No active task — check the saved tree checkpoint
         session_key = f"tasktree:{chat_id}"
-        try:
-            session = self.session_manager.get_or_create(session_key)
-        except Exception:
-            return f"没有找到 TaskTree 任务 (chat_id={chat_id})"
+        session_cb = SessionPersistenceCallback(
+            session_manager=self.session_manager,
+            session_key=session_key,
+        )
+        saved_tree = session_cb.load_checkpoint()
+        if saved_tree is not None:
+            return self._format_tree_status(saved_tree)
 
-        tt_msgs = [
-            m for m in session.messages
-            if isinstance(m, dict) and "[TaskTree" in m.get("content", "")
-        ]
-        if not tt_msgs:
-            return f"没有找到 TaskTree 任务 (chat_id={chat_id})"
-
-        lines = ["📋 TaskTree 进度:"]
-        for m in tt_msgs[-10:]:
-            content = m.get("content", "")
-            if isinstance(content, str):
-                lines.append(f"  {content}")
-        return "\n".join(lines)
+        return f"没有找到 TaskTree 任务 (chat_id={chat_id})"
 
     def get_status_str(self, chat_id: str) -> str | None:
         """Return a one-line status string for ContextBuilder injection, or None if idle.

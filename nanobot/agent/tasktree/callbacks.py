@@ -80,6 +80,24 @@ class SessionPersistenceCallback:
         except Exception as e:
             logger.warning("Failed to clear tree checkpoint: {}", e)
 
+    def clear_session(self) -> None:
+        """Clear both the tree checkpoint and all TaskTree messages from the session."""
+        try:
+            session = self.session_manager.get_or_create(self.session_key)
+            if _TREE_CHECKPOINT_KEY in session.metadata:
+                del session.metadata[_TREE_CHECKPOINT_KEY]
+            # Remove only TaskTree messages, keep other session data
+            original_count = len(session.messages)
+            session.messages = [
+                m for m in session.messages
+                if not (isinstance(m, dict) and "[TaskTree" in m.get("content", ""))
+            ]
+            removed = original_count - len(session.messages)
+            self.session_manager.save(session)
+            logger.debug("Cleared {} TaskTree messages for {}", removed, self.session_key)
+        except Exception as e:
+            logger.warning("Failed to clear session: {}", e)
+
     def _append_to_session(self, message: dict) -> None:
         """Append a message to the current session."""
         try:
