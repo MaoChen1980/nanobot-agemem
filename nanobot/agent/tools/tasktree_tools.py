@@ -31,10 +31,14 @@ class TaskplanTool(Tool):
             "Check status with taskstatus(), cancel with taskcancel()."
         )
 
-    async def execute(self, goal: str, **kwargs: Any) -> str:
+    async def execute(self, goal: str | None = None, task: str | None = None, **kwargs: Any) -> str:
         """Submit a TaskTree goal."""
         from nanobot.bus.events import InboundMessage
 
+        # Support both 'goal' (schema-correct) and 'task' (what the LLM often tries)
+        actual_goal = goal if goal is not None else task
+        if not actual_goal:
+            return "Error: taskplan requires a 'goal' or 'task' parameter with the task description."
         # Use the current session's chat_id so the command handler and LLM tool
         # operate on the same TaskTree session.
         session_key = kwargs.get("session_key", "sdk:direct")
@@ -46,7 +50,7 @@ class TaskplanTool(Tool):
             channel=channel,
             sender_id="llm",
             chat_id=chat_id,
-            content=goal,
+            content=actual_goal,
             media=[],
         )
         # Check if service has the task running already
@@ -55,7 +59,7 @@ class TaskplanTool(Tool):
             return "A TaskTree task is already running for this session. Use taskstatus() to check progress or taskcancel() to cancel it."
 
         await self._service.submit(inbound)
-        return f"TaskTree started for goal: {goal[:80]}{'...' if len(goal) > 80 else ''}. Use taskstatus() to check progress."
+        return f"TaskTree started for goal: {actual_goal[:80]}{'...' if len(actual_goal) > 80 else ''}. Use taskstatus() to check progress."
 
 
 @tool_parameters(tool_parameters_schema())
