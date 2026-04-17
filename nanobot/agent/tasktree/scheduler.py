@@ -174,8 +174,14 @@ class Scheduler:
             self._path_stack = [self._tree.root_id]
 
         # Loop-based DFS
+        iterations = 0
         while self._path_stack:
+            iterations += 1
+            if iterations > 1000:
+                logger.warning("DFS loop exceeded 1000 iterations, breaking")
+                break
             node = self._tree.get_node(self._path_stack[-1])
+            logger.debug("[DFS] iter={} stack={} node={} status={}", iterations, self._path_stack, node.id, node.status.value)
 
             if node.status == TaskStatus.PENDING:
                 result = await self._execute_node_uncallbacked(node)
@@ -191,10 +197,22 @@ class Scheduler:
                 self._save_checkpoint()
                 if wait_info:
                     return None
+            elif node.status == TaskStatus.RUNNING:
+                # RUNNING node (waiting for children) — try to descend to pending child
+                pending_child = self._find_next_pending_child(node.id)
+                logger.debug("[DFS] RUNNING node={} pending_child={}", node.id, pending_child)
+                if pending_child:
+                    self._path_stack.append(pending_child)
+                else:
+                    logger.debug("[DFS] no pending children for RUNNING node={}, advancing", node.id)
+                    await self._advance_path()
+                    self._save_checkpoint()
             else:
                 # Terminal node on top of stack — advance to next
                 await self._advance_path()
                 self._save_checkpoint()
+
+        logger.info("[DFS] loop exited, iterations={}, stack={}", iterations, self._path_stack)
 
         # Post-loop: if root is PENDING but has no pending children, finalize it.
         # This handles the case where root has RUNNING children that all failed/terminated
@@ -245,6 +263,15 @@ class Scheduler:
                         if pending_child:
                             self._path_stack.append(pending_child)
                         else:
+                            await self._advance_path()
+                            self._save_checkpoint()
+                    elif node.status == TaskStatus.RUNNING:
+                        # RUNNING node (waiting for children) — try to descend to pending child
+                        pending_child = self._find_next_pending_child(node.id)
+                        if pending_child:
+                            self._path_stack.append(pending_child)
+                        else:
+                            # No pending children yet — advance (bubble up)
                             await self._advance_path()
                             self._save_checkpoint()
                     else:
@@ -514,7 +541,30 @@ class Scheduler:
             logger.debug("[_handle_result] node={} result_summary={} parsed_children={}",
                 node.id, result_or_failure.summary[:200], children)
 
-            if not children:
+            # Root node with no children and no artifacts: the LLM said "leaf" (or
+            # returned nothing useful) but did no actual work. Only fail if the summary
+            # is the default "Task completed." (LLM produced nothing meaningful).
+            # If summary has real content, treat as a legitimate leaf completion.
+            is_meaningful_summary = result_or_failure.summary and result_or_failure.summary != "Task completed."
+            if node.parent_id is None and not children and not result_or_failure.artifacts and not is_meaningful_summary:
+                failure = FailureReport(
+                    node_id=node.id,
+                    status=TaskStatus.FAILED,
+                    root_cause=RootCause.NO_REMAINING_OPTIONS,
+                    summary=result_or_failure.summary or "Root produced no children and no artifacts",
+                    constraint_veto=False,
+                    workspace_state=result_or_failure.workspace_state,
+                )
+                node.failure = failure
+                node.result = None
+                self._tree.nodes[node.id].status = TaskStatus.FAILED
+                self._tree.nodes[node.id].failure = failure
+                # Fall through to root-level REPLAN logic below
+                result_or_failure = failure
+                # eslint-disable-next-line no-constant-condition
+                if False:  # dummy to allow next block to compile after edit
+                    pass
+            elif not children:
                 # Leaf node (no children) — mark done, advance path
                 self._tree.mark_done(node.id, result_or_failure)
                 await self._advance_path()
@@ -671,7 +721,8 @@ Rules:
             text = response.content if hasattr(response, "content") else str(response)
             logger.debug("[_llm_replan] raw_response={}", text[:500])
             goals = _try_parse_tasks_block(text)
-            return goals if goals else None
+            # None = no ##[TASKS] block found (failed to parse); [] = explicit empty (LLM says no more options)
+            return goals
         except Exception:
             logger.warning("LLM replan call failed")
             return None

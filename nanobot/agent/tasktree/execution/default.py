@@ -119,11 +119,14 @@ class DefaultExecutionAgent:
             # Parse children goals early so we know if node is a leaf before
             # applying the no-tools check
             from nanobot.agent.tasktree.execution.subgoal import _try_parse_tasks_block
-            children_goals = _try_parse_tasks_block(raw_content) or []
+            children_goals = _try_parse_tasks_block(raw_content)
 
             # Root node without children and without tools: LLM gave up without
             # doing anything. Fail it so REPLAN generates a proper plan.
-            if node.parent_id is None and not tools_used and not children_goals:
+            # children_goals is None means no ##[TASKS] block was found (LLM didn't decompose).
+            # children_goals == [] means explicit empty TASKS block (LLM said "no children needed")
+            #   — this goes to REPLAN to instruct LLM to use tools directly.
+            if node.parent_id is None and not tools_used and children_goals is None:
                 logger.warning(
                     "ExecutionAgent: root node {} used no tools and produced no children. "
                     "Failing so a concrete plan is generated.",
