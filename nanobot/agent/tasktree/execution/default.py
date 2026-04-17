@@ -16,7 +16,10 @@ from nanobot.agent.tasktree.models import (
     ConstraintSet,
     FailureReport,
     NodeResult,
+    RootCause,
     TaskNode,
+    TaskStatus,
+    WorkspaceState,
 )
 from nanobot.agent.tasktree.scheduler import ExecutionAgent
 from nanobot.providers.base import LLMProvider
@@ -111,6 +114,25 @@ class DefaultExecutionAgent:
                 result.usage.get("prompt_tokens", 0) + result.usage.get("completion_tokens", 0)
             )
             tools_used = result.tools_used or []
+
+            # Non-root nodes must use tools to perform actual work.
+            # If no tools were called, the LLM just said "done" without acting —
+            # treat this as a failure so the parent can REPLAN with the context.
+            if node.parent_id is not None and not tools_used:
+                logger.warning(
+                    "ExecutionAgent: node {} ({}) used no tools. "
+                    "Failing so parent can REPLAN.",
+                    node.id,
+                    node.goal[:50],
+                )
+                return FailureReport(
+                    node_id=node.id,
+                    status=TaskStatus.FAILED,
+                    root_cause=RootCause.NO_REMAINING_OPTIONS,
+                    summary="No tools were used. The agent must use tools (e.g., write_file, exec) to complete the task.",
+                    constraint_veto=False,
+                    workspace_state=WorkspaceState.CLEAN,
+                )
 
             # Extract artifacts and detect workspace state
             artifacts, ws_state = self._extract_artifacts(result.messages)
