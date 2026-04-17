@@ -74,11 +74,12 @@ def _try_parse_numbered_goals(content: str) -> list[str] | None:
     goals = []
     for line in lines:
         line = line.strip()
-        # Match "1. Goal text" or "1) Goal text" patterns
-        m = re.match(r'^\d+[.)]\s+(.+)', line)
+        # Match "1. Goal text", "1) Goal text", or Chinese "1、 Goal text" patterns
+        # Also supports fullwidth digits (１.) used by some models
+        m = re.match(r'^\d+[.)．、]\s*(.+)', line)
         if m:
             goal = m.group(1).strip()
-            if goal and len(goal) > 3:
+            if goal:
                 goals.append(goal)
     if len(goals) >= 2:
         return goals
@@ -91,11 +92,11 @@ def _try_parse_markdown_goals(content: str) -> list[str] | None:
     goals = []
     for line in lines:
         line = line.strip()
-        # Match bullet list items
-        m = re.match(r'^[-*+]\s+(.+)', line)
+        # Match bullet list items (including Chinese "、" style)
+        m = re.match(r'^[-*+●]\s*(.+)', line)
         if m:
             goal = m.group(1).strip()
-            if goal and len(goal) > 3:
+            if goal:
                 goals.append(goal)
     if len(goals) >= 2:
         return goals
