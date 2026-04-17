@@ -1064,6 +1064,26 @@ def agent(
     from nanobot.agent.tools.registry import ToolRegistry
     tools = ToolRegistry()
 
+    # Register default tools (same as AgentLoop._register_default_tools)
+    allowed_dir = config.workspace_path if config.tools.restrict_to_workspace else None
+    from nanobot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+    from nanobot.agent.tools.search import GlobTool, GrepTool
+    from nanobot.agent.tools.diff import DiffFileTool
+    from nanobot.agent.tools.shell import ExecTool
+    tools.register(ReadFileTool(workspace=config.workspace_path, allowed_dir=allowed_dir))
+    tools.register(DiffFileTool(workspace=config.workspace_path, allowed_dir=allowed_dir))
+    for cls in (WriteFileTool, EditFileTool, ListDirTool):
+        tools.register(cls(workspace=config.workspace_path, allowed_dir=allowed_dir))
+    for cls in (GlobTool, GrepTool):
+        tools.register(cls(workspace=config.workspace_path, allowed_dir=allowed_dir))
+    if config.tools.exec.enable:
+        tools.register(ExecTool(
+            working_dir=str(config.workspace_path),
+            timeout=config.tools.exec.timeout,
+            restrict_to_workspace=config.tools.restrict_to_workspace,
+            sandbox=config.tools.exec.sandbox,
+        ))
+
     # Single message mode
     if message:
         msg_stripped = message.strip()
