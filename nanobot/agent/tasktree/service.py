@@ -408,35 +408,26 @@ class TaskTreeService:
         channel = inbound.channel
         metadata = inbound.metadata
         class BusNotifierCallback(SchedulerCallbacks):
-            """Publishes progress events to bus."""
+            """Publishes progress events to session and memory only.
 
-            def _notify(self, emoji: str, node_id: str, text: str) -> None:
-                asyncio.create_task(bus.publish_outbound(OutboundMessage(
-                    channel=channel,
-                    chat_id=chat_id,
-                    content=f"{emoji} [{node_id}] {text}",
-                    metadata={**(metadata or {}), "_tasktree_progress": True},
-                )))
+            No direct bus messages during execution — the final result
+            is sent via _build_response when the scheduler finishes.
+            """
 
             def on_node_start(self, node: TaskNode) -> None:
                 session_cb.on_node_start(node)
-                self._notify("🚀", node.id, f"开始: {node.goal[:60]}")
 
             def on_node_done(self, node: TaskNode, result: NodeResult) -> None:
                 session_cb.on_node_done(node, result)
                 memory_cb.on_node_done(node, result)
-                summary = (result.summary[:80] or "完成")
-                self._notify("✅", node.id, summary)
 
             def on_node_failed(self, node: TaskNode, failure: FailureReport) -> None:
                 session_cb.on_node_failed(node, failure)
                 memory_cb.on_node_failed(node, failure)
-                self._notify("❌", node.id, f"失败: {failure.summary[:60]}")
 
             def on_node_blocked(self, node: TaskNode, failure: FailureReport) -> None:
                 session_cb.on_node_blocked(node, failure)
                 memory_cb.on_node_blocked(node, failure)
-                self._notify("🚫", node.id, f"被阻止: {failure.summary[:60]}")
 
         return Scheduler(
             config=SchedulerConfig(max_planning_children=5, max_depth=5),  # cap at 5 planning children, depth 5
