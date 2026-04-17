@@ -181,7 +181,6 @@ class Scheduler:
                 logger.warning("DFS loop exceeded 1000 iterations, breaking")
                 break
             node = self._tree.get_node(self._path_stack[-1])
-            logger.debug("[DFS] iter={} stack={} node={} status={}", iterations, self._path_stack, node.id, node.status.value)
 
             if node.status == TaskStatus.PENDING:
                 result = await self._execute_node_uncallbacked(node)
@@ -211,8 +210,6 @@ class Scheduler:
                 # Terminal node on top of stack — advance to next
                 await self._advance_path()
                 self._save_checkpoint()
-
-        logger.info("[DFS] loop exited, iterations={}, stack={}", iterations, self._path_stack)
 
         # Post-loop: if root is PENDING but has no pending children, finalize it.
         # This handles the case where root has RUNNING children that all failed/terminated
@@ -559,13 +556,52 @@ class Scheduler:
                 node.result = None
                 self._tree.nodes[node.id].status = TaskStatus.FAILED
                 self._tree.nodes[node.id].failure = failure
-                # Fall through to root-level REPLAN logic below
-                result_or_failure = failure
-                # eslint-disable-next-line no-constant-condition
-                if False:  # dummy to allow next block to compile after edit
-                    pass
+                # Root has no parent to bubble up to — handle REPLAN directly inline.
+                # This replaces the `result_or_failure = failure` + fallthrough approach
+                # which caused the `elif not children` block to misfire.
+                if node.replan_count >= self.config.replan_max:
+                    self._tree.mark_failed(node.id, failure)
+                    if self.callbacks:
+                        self.callbacks.on_node_failed(node, failure)
+                else:
+                    node.replan_count += 1
+                    logger.info("Root failed (replan {}/{}), calling REPLAN", node.replan_count, self.config.replan_max)
+                    new_goals = await self._llm_replan(node, failure.summary)
+                    if new_goals:
+                        self._tree.mark_running(node.id)
+                        for goal in new_goals[:self.config.max_planning_children]:
+                            self._tree.add_child(node.id, goal)
+                        self._path_stack.append(node.children[0])
+                        self._save_checkpoint()
+                        return False
+                    # REPLAN returned nothing — mark permanently failed
+                    self._tree.mark_failed(node.id, failure)
+                    if self.callbacks:
+                        self.callbacks.on_node_failed(node, failure)
+                await self._advance_path()
+                return False
             elif not children:
-                # Leaf node (no children) — mark done, advance path
+                # Leaf node (no children) — must have done real work (artifacts or meaningful summary).
+                # If not, mark failed so parent can REPLAN.
+                has_artifacts = bool(result_or_failure.artifacts)
+                is_meaningful = bool(result_or_failure.summary and result_or_failure.summary != "Task completed.")
+                if not has_artifacts and not is_meaningful:
+                    # Leaf did no real work — mark failed so parent REPLANs
+                    leaf_failure = FailureReport(
+                        node_id=node.id,
+                        status=TaskStatus.FAILED,
+                        root_cause=RootCause.NO_REMAINING_OPTIONS,
+                        summary=result_or_failure.summary or "Leaf node did no work",
+                        constraint_veto=False,
+                        workspace_state=result_or_failure.workspace_state,
+                    )
+                    node.failure = leaf_failure
+                    node.result = None
+                    self._tree.nodes[node.id].status = TaskStatus.FAILED
+                    self._tree.nodes[node.id].failure = leaf_failure
+                    await self._advance_path()
+                    return False
+                # Legitimate leaf — mark done
                 self._tree.mark_done(node.id, result_or_failure)
                 await self._advance_path()
                 return False
