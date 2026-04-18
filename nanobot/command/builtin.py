@@ -488,6 +488,7 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/taskstatus", cmd_taskstatus)
     router.priority("/taskcancel", cmd_taskcancel)
     router.priority_prefix("//taskinfo", cmd_taskinfo)
+    router.priority_prefix("/taskinfo", cmd_taskinfo)
     router.exact("/new", cmd_new)
     router.exact("/status", cmd_status)
     router.exact("/dream", cmd_dream)

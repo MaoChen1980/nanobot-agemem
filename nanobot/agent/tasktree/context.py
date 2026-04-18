@@ -55,17 +55,49 @@ def build_node_context(
     # For TaskTree root nodes, we use a minimal planning-focused system prompt
     # that overrides the nanobot helpful assistant personality.
     if node.parent_id is None:
-        # Minimal planning-only system prompt for root decomposition
+        # Context-rich planning prompt that explains WHY format matters
         system_prompt = (
-            "You are a task planning assistant. Your ONLY job is to decompose goals into subtasks.\n"
-            "RULES:\n"
-            "1. Output ONLY a ##[TASKS]...##[/TASKS] block in your response\n"
-            "2. Never give explanations, refusals, or suggestions — ONLY output the TASKS block\n"
-            "3. If you cannot do something directly, decompose it into subtasks that CAN be done\n"
-            "4. Do NOT use tools. Do NOT try to act. Only output TASKS block.\n"
-            "5. Format: ##[TASKS][\"subtask 1\", \"subtask 2\", \"subtask 3\"]##[/TASKS]\n"
-            "6. Always provide at least one subtask — never output empty []\n"
-            "7. If user asks for something impossible, STILL output subtasks for what CAN be done\n"
+            "You are a **Task Decomposition Planner** in an automated task execution system.\n"
+            "\n"
+            "HOW THIS SYSTEM WORKS:\n"
+            "1. You receive a user goal\n"
+            "2. You decompose it into subtasks OR ask for clarification\n"
+            "3. The system executes each subtask using AI agents\n"
+            "4. Results are combined and presented\n"
+            "\n"
+            "IMPORTANT CONTEXT:\n"
+            "- Your structured output (##[TASKS]...##[/TASKS]) drives what the system does next\n"
+            "- Without your output, the system cannot act\n"
+            "- The system will execute your subtasks automatically\n"
+            "\n"
+            "WHEN TO DECOMPOSE:\n"
+            "- User goal is clear and achievable with available tools\n"
+            "- User goal requires multiple steps\n"
+            "\n"
+            "WHEN TO ASK FOR CLARIFICATION (via TASKS block):\n"
+            "- Goal is vague: \"help me\" without specifics\n"
+            "- Goal needs info: \"book flight\" without date/destination\n"
+            "- Goal is impossible: use {\"goal\": \"...\", \"user_input_request\": \"...\"}\n"
+            "\n"
+            "OUTPUT FORMAT:\n"
+            "Always output ##[TASKS]...##[/TASKS] block. You have two options:\n"
+            "\n"
+            "Option 1 - DECOMPOSE (goal is clear):\n"
+            '##[TASKS]["subtask 1", "subtask 2", "subtask 3"]##[/TASKS]\n'
+            "\n"
+            "Option 2 - ASK FOR INFO (goal needs clarification):\n"
+            '##[TASKS][{"goal": "The actual task", "user_input_request": "What specific info do you need?"}]##[/TASKS]\n'
+            "\n"
+            "EXAMPLES:\n"
+            "\n"
+            "User: Write a calculator\n"
+            'Output: ##[TASKS]["Write calculator code", "Test calculator", "Verify it works"]##[/TASKS]\n'
+            "\n"
+            "User: Book a flight (no date given)\n"
+            'Output: ##[TASKS][{"goal": "Book a flight from Beijing to Shanghai", "user_input_request": "What date do you want to fly?"}]##[/TASKS]\n'
+            "\n"
+            "User: Book a flight on 2024-01-01\n"
+            'Output: ##[TASKS]["Search for flights", "Display results", "Guide user to booking"]##[/TASKS]\n'
         )
     else:
         system_prompt = context_builder.build_system_prompt(channel=channel)
@@ -173,13 +205,26 @@ def _build_task_block(
     # Root nodes use the TaskTree Decomposition block below instead.
     if node.parent_id is not None:
         parts.append(
-            "[User Input — Optional]\n"
-            "If you need information from the user to complete this task, you may ask.\n"
-            "Format: output a JSON object starting with { and include a field:\n"
-            '{"summary": "brief description of what you did", "user_input_request": "the question you need answered"}\n'
-            "Example:\n"
-            '{"summary": "Checking flight options", "user_input_request": "What city are you flying from and to?"}\n'
-            "Or in plain text: include [USER_INPUT_REQUEST]Your question here[/USER_INPUT_REQUEST]\n"
+            "[User Input Request]\n"
+            "When you need information from the user to complete this task, you MUST return a JSON object:\n"
+            "{\n"
+            '  "summary": "What you discovered or attempted so far",\n'
+            '  "user_input_request": "The specific question you need answered"\n'
+            "}\n"
+            "\n"
+            "RULES:\n"
+            "- summary: Brief description of what you found/attempted (will be shown to user)\n"
+            "- user_input_request: The specific question you need answered\n"
+            "- Output ONLY this JSON object — no explanations, no plain text questions\n"
+            "\n"
+            "Example 1 - Flight booking:\n"
+            '{"summary": "Searched for flights but need travel date", "user_input_request": "What date do you want to fly?"}\n'
+            "\n"
+            "Example 2 - Missing destination:\n"
+            '{"summary": "Cannot book without destination", "user_input_request": "Which city do you want to fly to?"}\n'
+            "\n"
+            "Example 3 - Task needs clarification:\n"
+            '{"summary": "Task goal is unclear", "user_input_request": "Do you want a one-way or round-trip ticket?"}\n'
             "[/User Input]"
         )
 

@@ -362,7 +362,22 @@ class TaskTreeService:
                         ))
                 return None
 
-            return self._build_response(root_result, tree, inbound)
+            response = self._build_response(root_result, tree, inbound)
+            # If response is None, root_result has user_input_question — treat as WAIT_INFO
+            if response is None:
+                logger.info("TaskTreeService: user_input_question detected, awaiting //taskinfo for chat_id={}", inbound.chat_id)
+                wait_info = self.find_wait_info_node(inbound.chat_id)
+                if wait_info:
+                    node_id, question = wait_info
+                    if question:
+                        await self.bus.publish_outbound(OutboundMessage(
+                            channel=inbound.channel,
+                            chat_id=inbound.chat_id,
+                            content=f"⏸️ [{node_id}] 需要信息:\n{question}\n\n请回复 //taskinfo <你的回答>",
+                            metadata={"_tasktree_wait_info": True},
+                        ))
+                return None
+            return response
         except asyncio.CancelledError:
             logger.info("TaskTree cancelled mid-execution for chat_id={}", inbound.chat_id)
             return None
@@ -579,8 +594,15 @@ class TaskTreeService:
         root_result: NodeResult,
         tree: TaskTree,
         inbound: InboundMessage,
-    ) -> OutboundMessage:
-        """Build an OutboundMessage from the root result."""
+    ) -> OutboundMessage | None:
+        """Build an OutboundMessage from the root result.
+
+        Returns None if root_result has user_input_question (caller should use WAIT_INFO path).
+        """
+        # If root needs user input, signal WAIT_INFO instead of completing
+        if root_result.user_input_question:
+            return None
+
         # Tree diagram — use concise format for all channels
         tree_diagram = self._format_tree_status(tree)
 

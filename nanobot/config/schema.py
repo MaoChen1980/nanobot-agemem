@@ -62,7 +62,7 @@ class DreamConfig(Base):
 class MemoryConfig(Base):
     """AgeMem structured memory configuration."""
 
-    enabled: bool = Field(default=True)  # Enable AgeMem memory system
+    enabled: bool = Field(default=False)  # Enable AgeMem memory system
     auto_add_enabled: bool = Field(default=True)  # Enable proactive auto-add
     max_ltm_entries: int = Field(default=1000, ge=1)
     importance_threshold: float = Field(default=0.3, ge=0.0, le=1.0)

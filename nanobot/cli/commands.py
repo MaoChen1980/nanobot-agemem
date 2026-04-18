@@ -1152,7 +1152,20 @@ def agent(
         # Regular single message — use AgentLoop directly
         async def run_once():
             from nanobot.bus.queue import MessageBus
+            from nanobot.agent.tasktree.service import TaskTreeService
             bus = MessageBus()
+            # Create TaskTreeService for //taskinfo command handling
+            tasktree_service = TaskTreeService(
+                bus=bus,
+                provider=provider,
+                tools=tools,
+                context_builder=context_builder,
+                session_manager=session_manager,
+                memory_store=memory_store,
+                memory_retriever=memory_retriever,
+                model=config.agents.defaults.model,
+            )
+            await tasktree_service.start()
             agent_loop = AgentLoop(
                 bus=bus,
                 provider=provider,
@@ -1175,6 +1188,8 @@ def agent(
                 session_ttl_minutes=config.agents.defaults.session_ttl_minutes,
                 memory_config=config.agents.defaults.memory,
             )
+            # Wire TaskTreeService for //taskinfo command
+            agent_loop._tasktree_service = tasktree_service
             renderer = StreamRenderer(render_markdown=markdown)
             response = await agent_loop.process_direct(
                 message, session_id,
@@ -1188,6 +1203,7 @@ def agent(
                     render_markdown=markdown,
                     metadata=response.metadata if response else None,
                 )
+            await tasktree_service.stop()
             await agent_loop.close_mcp()
 
         asyncio.run(run_once())

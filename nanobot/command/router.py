@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -12,6 +13,39 @@ if TYPE_CHECKING:
     from nanobot.session.manager import Session
 
 Handler = Callable[["CommandContext"], Awaitable["OutboundMessage | None"]]
+
+
+def _normalize_gitbash_path(text: str) -> str:
+    """Strip Git Bash expanded path prefix.
+
+    Git Bash translates Unix-style paths like /taskinfo to
+    C:/Program Files/Git/taskinfo on Windows. This reverses that
+    translation so commands like /taskinfo are recognized correctly.
+    """
+    # Commands that need Git Bash path normalization
+    normalized_commands = ("taskplan", "taskinfo", "taskstatus", "taskcancel")
+
+    try:
+        git_base = os.environ.get("MINGW_PREFIX", "").replace("\\", "/").strip("/").lower()
+        if git_base:
+            prefixes = [f"c:/{git_base}/", f"C:/{git_base}/"]
+            for prefix in prefixes:
+                if text.lower().startswith(prefix.lower()):
+                    rest = text[len(prefix):]
+                    for cmd in normalized_commands:
+                        if rest.lower().startswith(cmd):
+                            return "/" + rest
+                    return rest
+    except Exception:
+        pass
+    # Fallback: known Git Bash path patterns
+    for prefix in ("c:/program files/git/", "C:/Program Files/Git/"):
+        if text.lower().startswith(prefix.lower()):
+            rest = text[len(prefix):]
+            for cmd in normalized_commands:
+                if rest.lower().startswith(cmd):
+                    return "/" + rest
+    return text
 
 
 @dataclass
@@ -70,6 +104,11 @@ class CommandRouter:
     def is_priority(self, text: str) -> bool:
         """Check if text matches a priority command (exact or prefix)."""
         text_lower = text.strip().lower()
+        # Normalize Git Bash path expansion: C:/Program Files/Git/taskinfo -> /taskinfo
+        text_normalized = _normalize_gitbash_path(text_lower)
+        if text_normalized != text_lower:
+            logger.debug("is_priority: normalized Git Bash path from {!r} to {!r}", text_lower, text_normalized)
+            text_lower = text_normalized
         if text_lower in self._priority:
             logger.debug("is_priority {!r}: exact match in _priority", text_lower)
             return True
@@ -83,7 +122,12 @@ class CommandRouter:
 
     async def dispatch_priority(self, ctx: CommandContext) -> OutboundMessage | None:
         """Dispatch a priority command (exact or prefix). Called from run() without the lock."""
-        raw_lower = ctx.raw.lower()
+        raw_lower = ctx.raw.strip().lower()
+        # Normalize Git Bash path expansion: C:/Program Files/Git/taskinfo -> /taskinfo
+        raw_normalized = _normalize_gitbash_path(raw_lower)
+        if raw_normalized != raw_lower:
+            logger.debug("dispatch_priority: normalized Git Bash path from {!r} to {!r}", raw_lower, raw_normalized)
+            raw_lower = raw_normalized
         # Try exact priority first
         handler = self._priority.get(raw_lower)
         if handler:

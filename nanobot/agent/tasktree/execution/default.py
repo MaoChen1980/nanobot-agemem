@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -12,6 +13,7 @@ from nanobot.agent.context import ContextBuilder
 from nanobot.agent.hook import AgentHook
 from nanobot.agent.runner import AgentRunSpec, AgentRunner
 from nanobot.agent.tasktree.context import build_node_context, build_result_from_agent_response
+from nanobot.utils.helpers import strip_think
 from nanobot.agent.tasktree.models import (
     ConstraintSet,
     FailureReport,
@@ -121,12 +123,28 @@ class DefaultExecutionAgent:
             from nanobot.agent.tasktree.execution.subgoal import _try_parse_tasks_block
             children_goals = _try_parse_tasks_block(raw_content)
 
-            # Root node without children and without tools: LLM gave up without
-            # doing anything. Fail it so REPLAN generates a proper plan.
-            # children_goals is None means no ##[TASKS] block was found (LLM didn't decompose).
-            # children_goals == [] means explicit empty TASKS block (LLM said "no children needed")
-            #   — this goes to REPLAN to instruct LLM to use tools directly.
+            # Root node without children and without tools: LLM either gave up
+            # or asked a clarifying question.
+            # children_goals is None means no ##[TASKS] block was found.
             if node.parent_id is None and not tools_used and children_goals is None:
+                # Check if the LLM's response looks like a clarifying question
+                # If so, treat it as a user_input_request instead of a failure
+                question_indicators = ["吗？", "吗?", "吗 ", "哪个", "什么", "如何", "怎么",
+                                       "which", "what", "how", "should", "want", "需要", "是否"]
+                looks_like_question = any(ind in raw_content for ind in question_indicators)
+                logger.info(f"[ExecutionAgent] root no children/no tools. looks_like_question={looks_like_question}, content_len={len(raw_content)}")
+                if looks_like_question and len(raw_content.strip()) < 200:
+                    # LLM is asking for clarification - treat as user_input_request
+                    logger.info(f"[ExecutionAgent] Treating as user_input_request: {raw_content[:100]}")
+                    return build_result_from_agent_response(
+                        node_id=node.id,
+                        agent_content="Task requires clarification",
+                        artifacts=[],
+                        token_spent=token_spent,
+                        workspace_state="clean",
+                        user_input_question=raw_content.strip(),
+                    )
+                # Otherwise, fail so REPLAN generates a proper plan
                 logger.warning(
                     "ExecutionAgent: root node {} used no tools and produced no children. "
                     "Failing so a concrete plan is generated.",
@@ -150,14 +168,33 @@ class DefaultExecutionAgent:
             user_input_question: str | None = None
             agent_summary: str | None = None
             raw_content = result.final_content or ""
-            if raw_content.strip().startswith("{"):
+
+            # Strip markdown code fences before JSON parsing
+            # e.g. ```json\n{...}\n``` → {...}
+            # Also strip think blocks first, since LLM often wraps response in <thinking> or ##
+            content_for_json = strip_think(raw_content)
+            content_for_json = content_for_json.strip()
+            logger.debug("[ExecutionAgent] after strip_think, content starts with: {!r:.50}", content_for_json[:50])
+            if content_for_json.startswith("```"):
+                # Remove ```json or ``` fences
+                content_for_json = re.sub(r'^```(?:json)?\s*\n?', '', content_for_json)
+                content_for_json = re.sub(r'\n?\s*```$', '', content_for_json)
+                content_for_json = content_for_json.strip()
+
+            if content_for_json.startswith("{"):
                 try:
                     import json
-                    parsed = json.loads(raw_content)
+                    parsed = json.loads(content_for_json)
                     user_input_question = parsed.get("user_input_request") or None
                     agent_summary = parsed.get("summary")
-                except Exception:
-                    pass
+                    logger.debug("[ExecutionAgent] JSON parsed: user_input_question={}, agent_summary={}", user_input_question, agent_summary)
+                    # Update raw_content to cleaned version for summary fallback
+                    if not agent_summary and not user_input_question:
+                        pass  # keep original raw_content
+                    else:
+                        raw_content = content_for_json
+                except Exception as e:
+                    logger.warning("[ExecutionAgent] JSON parse failed: {}", e)
 
             # If no user_input_request in JSON, fall back to detecting
             # a [USER_INPUT_REQUEST] marker in plain text.
