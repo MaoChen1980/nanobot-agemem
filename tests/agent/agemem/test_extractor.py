@@ -229,3 +229,124 @@ class TestToolCallPair_toFactContent:
         content = pair.to_fact_content()
         assert len(content["output"]) == 500
         assert content["output"] == "x" * 500
+
+    def test_arguments_raw_string_not_json(self):
+        """Arguments as raw string (not JSON) are wrapped in {"raw": ...}."""
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call-1", "function": {"name": "run_command", "arguments": "ls -la"}},
+                ],
+                "timestamp": "2026-04-18T10:00:00",
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": "file listing",
+                "timestamp": "2026-04-18T10:00:01",
+            },
+        ]
+        pairs = extract_tool_call_pairs(messages)
+        assert pairs[0].tool_input == {"raw": "ls -la"}
+
+    def test_missing_function_name(self):
+        """Tool call with no function name uses 'unknown'."""
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call-1", "function": {"arguments": "{}"}},
+                ],
+                "timestamp": "2026-04-18T10:00:00",
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": "ok",
+                "timestamp": "2026-04-18T10:00:01",
+            },
+        ]
+        pairs = extract_tool_call_pairs(messages)
+        assert pairs[0].tool_name == "unknown"
+
+    def test_empty_tool_calls_array(self):
+        """Assistant message with empty tool_calls array produces no pairs."""
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [],
+                "timestamp": "2026-04-18T10:00:00",
+            },
+        ]
+        pairs = extract_tool_call_pairs(messages)
+        assert pairs == []
+
+    def test_only_tool_result_without_call(self):
+        """Orphan tool result (no matching call) is silently ignored."""
+        messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "orphan-99",
+                "content": "I have no call",
+                "timestamp": "2026-04-18T10:00:01",
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call-1", "function": {"name": "read_file", "arguments": "{}"}},
+                ],
+                "timestamp": "2026-04-18T10:00:02",
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": "content",
+                "timestamp": "2026-04-18T10:00:03",
+            },
+        ]
+        # Only the matched pair should be returned
+        pairs = extract_tool_call_pairs(messages)
+        assert len(pairs) == 1
+        assert pairs[0].tool_call_id == "call-1"
+
+    def test_timestamp_from_message(self):
+        """Timestamp is taken from the assistant message (not tool result)."""
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call-1", "function": {"name": "read_file", "arguments": "{}"}},
+                ],
+                "timestamp": "2026-04-18T10:00:00",
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": "result",
+                "timestamp": "2099-01-01T00:00:00",  # far future
+            },
+        ]
+        pairs = extract_tool_call_pairs(messages)
+        assert pairs[0].timestamp == "2026-04-18T10:00:00"
+
+    def test_tool_result_with_unicode(self):
+        """Tool result with unicode content is preserved."""
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call-1", "function": {"name": "read_file", "arguments": "{}"}},
+                ],
+                "timestamp": "2026-04-18T10:00:00",
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": "你好 世界 🌍",
+                "timestamp": "2026-04-18T10:00:01",
+            },
+        ]
+        pairs = extract_tool_call_pairs(messages)
+        assert pairs[0].tool_output == "你好 世界 🌍"
+        assert pairs[0].success is True

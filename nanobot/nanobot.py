@@ -84,6 +84,8 @@ class Nanobot:
         # Build shared components needed by both AgentLoop and TaskTreeService
         memory_store = MemoryStoreV2(workspace_path)
         memory_retriever = MemoryRetriever(memory_store)
+        from nanobot.agent.agemem.causal_store import CausalStore
+        causal_store = CausalStore(workspace_path)
         context_builder = ContextBuilder(
             workspace_path,
             timezone=defaults.timezone,
@@ -106,6 +108,7 @@ class Nanobot:
             memory_store=memory_store,
             memory_retriever=memory_retriever,
             model=defaults.model,
+            causal_store=causal_store,
         )
 
         # Register TaskTreeService route on RouterBus

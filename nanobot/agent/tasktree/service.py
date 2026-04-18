@@ -26,6 +26,7 @@ from nanobot.providers.base import LLMProvider
 from nanobot.utils.helpers import estimate_message_tokens, estimate_prompt_tokens_chain
 
 if TYPE_CHECKING:
+    from nanobot.agent.agemem.causal_store import CausalStore
     from nanobot.agent.agemem.retriever import MemoryRetriever
     from nanobot.agent.agemem.store import MemoryStoreV2
     from nanobot.agent.context import ContextBuilder
@@ -52,6 +53,7 @@ class TaskTreeService:
         memory_store: MemoryStoreV2,
         memory_retriever: MemoryRetriever,
         model: str | None = None,
+        causal_store: CausalStore | None = None,
     ):
         self.bus = bus
         self.provider = provider
@@ -61,6 +63,7 @@ class TaskTreeService:
         self.memory_store = memory_store
         self.memory_retriever = memory_retriever
         self.model = model or provider.get_default_model()
+        self.causal_store = causal_store
 
         # chat_id → running task
         self._tasks: dict[str, asyncio.Task] = {}
@@ -427,7 +430,7 @@ class TaskTreeService:
             provider=self.provider,
             model=self.model,
         )
-        memory_cb = MemoryCallback(memory_store=self.memory_store)
+        memory_cb = MemoryCallback(memory_store=self.memory_store, causal_store=self.causal_store)
 
         bus = self.bus
         chat_id = inbound.chat_id

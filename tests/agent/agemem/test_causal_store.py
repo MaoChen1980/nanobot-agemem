@@ -169,3 +169,62 @@ class TestCausalStore_Persistence:
         # Highest importance (0.4, 0.3, 0.2) should remain
         remaining = {f.content["i"] for f in small_store.get_all()}
         assert remaining == {2, 3, 4}
+
+
+class TestCausalStore_CausalLinksAdvanced:
+    def test_get_causal_chain_both_directions(self, store: CausalStore):
+        """get_causal_chain with direction='both' returns both causes and effects."""
+        a = store.add_fact(content={"s": "a"}, fact_type="action", timestamp="2026-04-18T09:00:00")
+        b = store.add_fact(content={"s": "b"}, fact_type="action", timestamp="2026-04-18T10:00:00")
+        c = store.add_fact(content={"s": "c"}, fact_type="event", timestamp="2026-04-18T11:00:00")
+        store.link_causal(a.id, b.id)
+        store.link_causal(b.id, c.id)
+
+        # From b, both causes (a) and effects (c) should be found
+        chain = store.get_causal_chain(b.id, depth=1, direction="both")
+        chain_ids = {f.id for f in chain}
+        assert chain_ids == {a.id, c.id}
+
+    def test_get_causal_chain_no_links(self, store: CausalStore):
+        """Orphan fact with no causal links returns empty chain."""
+        orphan = store.add_fact(content={"x": 1}, fact_type="action")
+        chain = store.get_causal_chain(orphan.id, depth=3)
+        assert chain == []
+
+    def test_get_causes_empty_for_orphan(self, store: CausalStore):
+        """get_causes returns empty list for fact with no causes."""
+        fact = store.add_fact(content={"x": 1}, fact_type="action")
+        assert store.get_causes(fact.id) == []
+
+    def test_get_effects_empty_for_orphan(self, store: CausalStore):
+        """get_effects returns empty list for fact with no effects."""
+        fact = store.add_fact(content={"x": 1}, fact_type="action")
+        assert store.get_effects(fact.id) == []
+
+
+class TestCausalStore_QueryEdgeCases:
+    def test_query_by_time_range_no_match(self, store: CausalStore):
+        """Time range query with no matching facts returns empty."""
+        store.add_fact(content={"t": "a"}, fact_type="event", timestamp="2026-01-01T00:00:00")
+        results = store.query_by_time_range("2026-06-01T00:00:00", "2026-06-30T00:00:00")
+        assert results == []
+
+    def test_query_by_content_no_match(self, store: CausalStore):
+        """Content query with no match returns empty."""
+        store.add_fact(content={"tool": "read_file", "path": "a.txt"}, fact_type="action")
+        results = store.query_by_content({"tool": "delete_file"})
+        assert results == []
+
+    def test_query_by_content_partial_match(self, store: CausalStore):
+        """Content query requires all key-value pairs to match."""
+        store.add_fact(content={"tool": "read_file", "path": "a.txt"}, fact_type="action")
+        # Missing 'path' key
+        results = store.query_by_content({"tool": "read_file", "path": None})
+        assert results == []
+
+    def test_query_by_time_range_limit(self, store: CausalStore):
+        """Time range query respects limit parameter."""
+        for i in range(5):
+            store.add_fact(content={"i": i}, fact_type="event", timestamp=f"2026-04-{i+1:02d}T00:00:00")
+        results = store.query_by_time_range("2026-01-01T00:00:00", "2026-12-31T00:00:00", limit=2)
+        assert len(results) == 2

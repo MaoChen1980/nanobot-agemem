@@ -674,8 +674,10 @@ def gateway(
     from nanobot.agent.context import ContextBuilder
     from nanobot.agent.agemem.retriever import MemoryRetriever
     from nanobot.agent.agemem.store import MemoryStoreV2
+    from nanobot.agent.agemem.causal_store import CausalStore
     memory_store = MemoryStoreV2(config.workspace_path)
     memory_retriever = MemoryRetriever(memory_store)
+    causal_store = CausalStore(config.workspace_path)
     from nanobot.agent.tools.registry import ToolRegistry
     tools = ToolRegistry()
 
@@ -695,6 +697,7 @@ def gateway(
         session_manager=session_manager,
         memory_store=memory_store,
         memory_retriever=memory_retriever,
+        causal_store=causal_store,
         model=config.agents.defaults.model,
     )
 
@@ -1059,8 +1062,10 @@ def agent(
     )
     from nanobot.agent.agemem.retriever import MemoryRetriever
     from nanobot.agent.agemem.store import MemoryStoreV2
+    from nanobot.agent.agemem.causal_store import CausalStore
     memory_store = MemoryStoreV2(config.workspace_path)
     memory_retriever = MemoryRetriever(memory_store)
+    causal_store = CausalStore(config.workspace_path)
     from nanobot.agent.tools.registry import ToolRegistry
     tools = ToolRegistry()
 
@@ -1101,6 +1106,7 @@ def agent(
                     memory_store=memory_store,
                     memory_retriever=memory_retriever,
                     model=config.agents.defaults.model,
+                    causal_store=causal_store,
                 )
                 await router.start_router()
                 await tasktree_service.start()
@@ -1164,6 +1170,7 @@ def agent(
                 memory_store=memory_store,
                 memory_retriever=memory_retriever,
                 model=config.agents.defaults.model,
+                causal_store=causal_store,
             )
             await tasktree_service.start()
             agent_loop = AgentLoop(
@@ -1220,6 +1227,7 @@ def agent(
         session_manager=session_manager,
         memory_store=memory_store,
         memory_retriever=memory_retriever,
+        causal_store=causal_store,
         tools=tools,
     )
 
@@ -1234,6 +1242,7 @@ def _run_agent_interactive(
     session_manager,
     memory_store,
     memory_retriever,
+    causal_store,
     tools,
 ):
     """Shared interactive mode for agent command, used by both CLI entry points."""
@@ -1266,6 +1275,7 @@ def _run_agent_interactive(
         memory_store=memory_store,
         memory_retriever=memory_retriever,
         model=config.agents.defaults.model,
+        causal_store=causal_store,
     )
 
     def _tasktree_predicate(msg: Any) -> bool:

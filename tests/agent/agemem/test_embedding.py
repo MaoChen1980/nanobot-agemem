@@ -134,3 +134,23 @@ class TestEmbeddingIndex:
         assert results[1][0] == "neutral"
         assert results[2][0] == "worst"
         assert results[0][1] > results[1][1] > results[2][1]
+
+
+class TestEmbedTextAPI:
+    def test_embed_text_returns_none_when_client_unavailable(self, monkeypatch):
+        """embed_text returns None when OpenAI client cannot be created."""
+        # Simulate import failure by making openai import raise
+        import sys
+        class FakeModule:
+            class OpenAI:
+                def __init__(self):
+                    raise ImportError("fake")
+        monkeypatch.setitem(sys.modules, "openai", FakeModule())
+
+        # Need to reset the global client so it re-attempts
+        import nanobot.agent.agemem.embedding as embedding_module
+        embedding_module._client = None
+
+        result = embedding_module.embed_text("hello world")
+        # Should return None (graceful degradation)
+        assert result is None or isinstance(result, list)

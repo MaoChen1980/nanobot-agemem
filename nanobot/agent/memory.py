@@ -384,6 +384,7 @@ class Consolidator:
         build_messages: Callable[..., list[dict[str, Any]]],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         max_completion_tokens: int = 4096,
+        causal_store: "CausalStore | None" = None,
     ):
         self.store = store
         self.provider = provider
@@ -393,6 +394,7 @@ class Consolidator:
         self.max_completion_tokens = max_completion_tokens
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
+        self._causal_store = causal_store
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -482,11 +484,37 @@ class Consolidator:
             )
             summary = response.content or "[no summary]"
             self.store.append_history(summary)
+            self._extract_and_store_causal_facts(messages)
             return summary
         except Exception:
             logger.warning("Consolidation LLM call failed, raw-dumping to history")
             self.store.raw_archive(messages)
+            self._extract_and_store_causal_facts(messages)
             return None
+
+    def _extract_and_store_causal_facts(self, messages: list[dict]) -> None:
+        """Extract tool_call pairs from messages and store as causal facts."""
+        if self._causal_store is None:
+            return
+        try:
+            from nanobot.agent.agemem.extractor import extract_tool_call_pairs, extract_facts_from_pairs
+
+            pairs = extract_tool_call_pairs(messages)
+            if not pairs:
+                return
+
+            facts = extract_facts_from_pairs(pairs, importance=0.5)
+            for fact_data in facts:
+                self._causal_store.add_fact(
+                    content=fact_data["content"],
+                    fact_type=fact_data["fact_type"],
+                    importance=fact_data["importance"],
+                    timestamp=fact_data["timestamp"],
+                    tags=fact_data["tags"],
+                )
+            logger.debug("CausalStore: extracted {} facts from {} messages", len(facts), len(messages))
+        except Exception:
+            logger.exception("Failed to extract causal facts from messages")
 
     async def maybe_consolidate_by_tokens(self, session: Session) -> None:
         """Loop: archive old messages until prompt fits within safe budget.

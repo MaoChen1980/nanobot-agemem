@@ -268,6 +268,7 @@ class AgentLoop:
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             max_completion_tokens=provider.generation.max_tokens,
+            causal_store=self._build_causal_store(),
         )
         self.auto_compact = AutoCompact(
             sessions=self.sessions,
@@ -339,6 +340,15 @@ class AgentLoop:
             SummarizeSessionTool,
         ):
             self.tools.register(cls(workspace=self.workspace))
+
+    def _build_causal_store(self) -> "CausalStore | None":
+        """Build CausalStore for the agent loop (lazy import to avoid circular deps)."""
+        try:
+            from nanobot.agent.agemem.causal_store import CausalStore
+            return CausalStore(self.workspace)
+        except Exception:
+            logger.warning("Could not initialize CausalStore — causal memory disabled")
+            return None
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
