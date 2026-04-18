@@ -68,12 +68,116 @@ class ContextBuilder:
             src = "来源: nanobot记忆"
             tags = f"[tags={', '.join(e.tags)}]" if e.tags else ""
             freshness = f" {se.freshness_label}" if se.freshness_label else ""
-            lines.append(f"- {src} {ts}{freshness} {tags} {e.content[:150]}{'...' if len(e.content) > 150 else ''}")
+            content_text = e.content.get("text", "") if isinstance(e.content, dict) else str(e.content)
+            lines.append(f"- {src} {ts}{freshness} {tags} {content_text[:150]}{'...' if len(content_text) > 150 else ''}")
 
         return (
             "[记忆参考]\n"
             + "\n".join(lines)
             + "\n[/记忆参考]"
+        )
+
+    def build_causal_context(self, query: str, top_k: int = 5) -> str:
+        """Build a causal-aware memory context using embeddings + BM25 hybrid.
+
+        Combines:
+        - Embedding similarity (semantic relevance)
+        - BM25 keyword matching
+        - Causal chain proximity
+        - Timestamp recency
+        - Importance weighting
+
+        Args:
+            query: User query to match against
+            top_k: Number of facts to return
+
+        Returns:
+            Formatted causal context string
+        """
+        # Lazy imports to avoid circular dependencies
+        from nanobot.agent.agemem.embedding import embed_text, cosine_similarity
+        from nanobot.agent.agemem.causal_store import CausalStore
+
+        causal_store = CausalStore(self.workspace)
+        all_facts = causal_store.get_all()
+
+        if not all_facts:
+            return ""
+
+        # Get query embedding
+        query_emb = embed_text(query)
+        if query_emb is None:
+            # Fallback to BM25 if embedding unavailable
+            return self.get_memory_context_for_query(query, top_k)
+
+        # Score facts by hybrid relevance
+        scored = []
+        for fact in all_facts:
+            # 1. Embedding similarity (semantic)
+            fact_emb = embed_text(str(fact.content))
+            sem_sim = cosine_similarity(query_emb, fact_emb) if fact_emb else 0.0
+
+            # 2. Content similarity via BM25-like keyword overlap
+            query_terms = set(query.lower().split())
+            content_text = str(fact.content).lower()
+            content_terms = set(content_text.split())
+            keyword_overlap = len(query_terms & content_terms) / max(len(query_terms), 1)
+
+            # 3. Causal importance (facts with causal links are more important)
+            causal_boost = 0.1 if (fact.causes or fact.effects) else 0.0
+
+            # 4. Recency decay (freshness)
+            try:
+                from datetime import datetime
+                fact_time = datetime.fromisoformat(fact.timestamp)
+                age_days = (datetime.now() - fact_time).total_seconds() / 86400
+                recency = max(0.0, 1.0 - age_days / 30.0)  # 30-day halflife
+            except Exception:
+                recency = 0.5
+
+            # Combined score with dynamic weights
+            W_EMBED = 0.40
+            W_KEYWORD = 0.25
+            W_IMPORTANCE = 0.20
+            W_RECENT = 0.15
+
+            combined = (
+                W_EMBED * sem_sim +
+                W_KEYWORD * keyword_overlap +
+                W_IMPORTANCE * fact.importance +
+                W_RECENT * recency +
+                causal_boost
+            )
+
+            scored.append((fact, combined, sem_sim))
+
+        # Sort by combined score and take top-k
+        scored.sort(key=lambda x: x[1], reverse=True)
+        top_facts = scored[:top_k]
+
+        if not top_facts:
+            return ""
+
+        # Format output with causal chain info
+        lines = []
+        for fact, score, sem_sim in top_facts:
+            ts = fact.timestamp[:16] if fact.timestamp else ""
+            causal_info = ""
+            if fact.causes:
+                causal_info += f" ←cause({len(fact.causes)})"
+            if fact.effects:
+                causal_info += f" →effect({len(fact.effects)})"
+
+            content_text = fact.content.get("text", "") if isinstance(fact.content, dict) else str(fact.content)
+            lines.append(
+                f"- [{ts}] {content_text[:120]}{'...' if len(content_text) > 120 else ''}"
+                f"{causal_info} (rel={score:.2f})"
+            )
+
+        return (
+            "[因果记忆参考]\n"
+            + "\n".join(lines)
+            + "\n[/因果记忆参考]"
         )
 
     def build_system_prompt(
