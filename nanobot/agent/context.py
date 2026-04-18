@@ -37,6 +37,7 @@ class ContextBuilder:
         self._memory_config = memory_config
         self._retriever: "MemoryRetriever | None" = None
         self._tasktree_status_fn = tasktree_status_fn  # callable(chat_id) -> str | None
+        self._bootstrap_cache: dict[str, tuple[float, str]] = {}  # filename -> (mtime, content)
 
     def _get_retriever(self) -> "MemoryRetriever":
         """Lazily create the BM25 memory retriever."""
@@ -281,13 +282,24 @@ class ContextBuilder:
         return _to_blocks(left) + _to_blocks(right)
 
     def _load_bootstrap_files(self) -> str:
-        """Load all bootstrap files from workspace."""
+        """Load all bootstrap files from workspace, cached with mtime validation."""
         parts = []
 
         for filename in self.BOOTSTRAP_FILES:
             file_path = self.workspace / filename
             if file_path.exists():
-                content = file_path.read_text(encoding="utf-8")
+                try:
+                    mtime = file_path.stat().st_mtime
+                except OSError:
+                    mtime = -1
+
+                cached = self._bootstrap_cache.get(filename)
+                if cached is None or cached[0] != mtime:
+                    content = file_path.read_text(encoding="utf-8")
+                    self._bootstrap_cache[filename] = (mtime, content)
+                else:
+                    content = cached[1]
+
                 parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
