@@ -95,13 +95,11 @@ class EmbeddingIndex:
     def __init__(self):
         self._ids: list[str] = []
         self._embeddings: list[list[float]] = []
-        self._contents: list[str] = []  # original text for fallback
 
-    def add(self, id: str, embedding: list[float], content: str) -> None:
+    def add(self, id: str, embedding: list[float]) -> None:
         """Add a fact embedding to the index."""
         self._ids.append(id)
         self._embeddings.append(embedding)
-        self._contents.append(content)
 
     def search(self, query_embedding: list[float], top_k: int = 5) -> list[tuple[str, float]]:
         """Find top-k facts by embedding similarity.
@@ -125,7 +123,6 @@ class EmbeddingIndex:
         """Clear the index."""
         self._ids.clear()
         self._embeddings.clear()
-        self._contents.clear()
 
     def __len__(self) -> int:
         return len(self._ids)

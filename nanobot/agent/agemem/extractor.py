@@ -4,6 +4,7 @@ Extracts structured (tool, input, output, success) tuples from conversation
 messages, which become candidate facts for causal memory.
 """
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -55,10 +56,9 @@ def extract_tool_call_pairs(messages: list[dict[str, Any]]) -> list[ToolCallPair
                 func_name = func.get("name", "unknown")
                 func_args = func.get("arguments", "{}")
                 if isinstance(func_args, str):
-                    import json as _json
                     try:
-                        func_args = _json.loads(func_args)
-                    except Exception:
+                        func_args = json.loads(func_args)
+                    except json.JSONDecodeError:
                         func_args = {"raw": func_args}
 
                 pending_calls[tc_id] = {
@@ -77,10 +77,12 @@ def extract_tool_call_pairs(messages: list[dict[str, Any]]) -> list[ToolCallPair
 
                 # Determine success: tool content doesn't indicate failure by itself,
                 # but we can check for common error patterns
+                lower = content.lower()
                 success = not (
                     content.startswith("Error:") or
                     content.startswith("Exception:") or
-                    '"success":false' in content.lower() or
+                    '"success":false' in lower or
+                    '"success": false' in lower or
                     content.startswith("Traceback")
                 )
 

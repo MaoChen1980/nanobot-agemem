@@ -95,6 +95,8 @@ class ContextBuilder:
             Formatted causal context string
         """
         # Lazy imports to avoid circular dependencies
+        from datetime import datetime as dt
+
         from nanobot.agent.agemem.embedding import embed_text, cosine_similarity
         from nanobot.agent.agemem.causal_store import CausalStore
 
@@ -128,9 +130,8 @@ class ContextBuilder:
 
             # 4. Recency decay (freshness)
             try:
-                from datetime import datetime
-                fact_time = datetime.fromisoformat(fact.timestamp)
-                age_days = (datetime.now() - fact_time).total_seconds() / 86400
+                fact_time = dt.fromisoformat(fact.timestamp)
+                age_days = (dt.now() - fact_time).total_seconds() / 86400
                 recency = max(0.0, 1.0 - age_days / 30.0)  # 30-day halflife
             except Exception:
                 recency = 0.5
@@ -149,7 +150,7 @@ class ContextBuilder:
                 causal_boost
             )
 
-            scored.append((fact, combined, sem_sim))
+            scored.append((fact, combined))
 
         # Sort by combined score and take top-k
         scored.sort(key=lambda x: x[1], reverse=True)
@@ -160,7 +161,7 @@ class ContextBuilder:
 
         # Format output with causal chain info
         lines = []
-        for fact, score, sem_sim in top_facts:
+        for fact, score in top_facts:
             ts = fact.timestamp[:16] if fact.timestamp else ""
             causal_info = ""
             if fact.causes:
