@@ -74,7 +74,7 @@ class MemoryStoreV2:
 
     # -- CRUD ----------------------------------------------------------------
 
-    def add(self, content: str, importance: float = 0.5, tags: list[str] | None = None) -> MemoryEntry:
+    def add(self, content: dict[str, Any], importance: float = 0.5, tags: list[str] | None = None) -> MemoryEntry:
         """Add a new memory entry and persist."""
         entry = MemoryEntry(
             id=str(uuid.uuid4()),
@@ -90,7 +90,7 @@ class MemoryStoreV2:
     def update(
         self,
         id: str,
-        content: str | None = None,
+        content: dict[str, Any] | None = None,
         importance: float | None = None,
         tags: list[str] | None = None,
     ) -> MemoryEntry | None:
@@ -172,7 +172,7 @@ class MemoryStoreV2:
             if stripped.startswith("#") and current_content:
                 entry = MemoryEntry(
                     id=str(uuid.uuid4()),
-                    content="\n".join(current_content).strip(),
+                    content={"text": "\n".join(current_content).strip()},
                     importance=0.5,
                     tags=current_tags,
                 )
@@ -183,7 +183,7 @@ class MemoryStoreV2:
         if current_content:
             entry = MemoryEntry(
                 id=str(uuid.uuid4()),
-                content="\n".join(current_content).strip(),
+                content={"text": "\n".join(current_content).strip()},
                 importance=0.5,
                 tags=current_tags,
             )

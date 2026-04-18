@@ -35,7 +35,7 @@ class MemoryCallback:
     def on_node_done(self, node: TaskNode, result: NodeResult) -> None:
         try:
             self.memory_store.add(
-                content=f"[TaskTree Node {node.id}] {result.summary}",
+                content={"text": f"[TaskTree Node {node.id}] {result.summary}"},
                 importance=0.5,
                 tags=["tasktree", "success", f"depth:{node.depth}"],
             )
@@ -46,7 +46,7 @@ class MemoryCallback:
     def on_node_failed(self, node: TaskNode, failure: FailureReport) -> None:
         try:
             self.memory_store.add(
-                content=f"[TaskTree Node {node.id} FAILED] {failure.summary} (root_cause={failure.root_cause.value})",
+                content={"text": f"[TaskTree Node {node.id} FAILED] {failure.summary} (root_cause={failure.root_cause.value})"},
                 importance=0.7,  # Failures are more important to remember
                 tags=["tasktree", "failure", failure.root_cause.value, f"depth:{node.depth}"],
             )
@@ -57,7 +57,7 @@ class MemoryCallback:
     def on_node_blocked(self, node: TaskNode, failure: FailureReport) -> None:
         try:
             self.memory_store.add(
-                content=f"[TaskTree Node {node.id} BLOCKED] {failure.summary} (constraint_veto={failure.constraint_veto})",
+                content={"text": f"[TaskTree Node {node.id} BLOCKED] {failure.summary} (constraint_veto={failure.constraint_veto})"},
                 importance=0.7,
                 tags=["tasktree", "blocked", failure.root_cause.value, f"depth:{node.depth}"],
             )

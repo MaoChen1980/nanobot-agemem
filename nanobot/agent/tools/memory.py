@@ -74,7 +74,7 @@ class AddMemoryTool(_MemoryTool):
         importance: float = 0.5,
         tags: list[str] | None = None,
     ) -> str:
-        entry = self.store.add(content=content, importance=importance, tags=tags or [])
+        entry = self.store.add(content={"text": content}, importance=importance, tags=tags or [])
         return (
             f"Added memory entry:\n"
             f"  ID: {entry.id}\n"
@@ -116,13 +116,13 @@ class UpdateMemoryTool(_MemoryTool):
         importance: float | None = None,
         tags: list[str] | None = None,
     ) -> str:
-        entry = self.store.update(id=id, content=content, importance=importance, tags=tags)
+        entry = self.store.update(id=id, content={"text": content} if content is not None else None, importance=importance, tags=tags)
         if entry is None:
             return f"Memory entry '{id}' not found."
         return (
             f"Updated memory entry:\n"
             f"  ID: {entry.id}\n"
-            f"  Content: {entry.content[:100]}{'...' if len(entry.content) > 100 else ''}\n"
+            f"  Content: {str(entry.content)[:100]}\n"
             f"  Importance: {entry.importance}\n"
             f"  Tags: {', '.join(entry.tags) or '(none)'}\n"
             f"  Updated: {entry.updated_at}"
@@ -184,9 +184,10 @@ class RetrieveMemoriesTool(_MemoryTool):
             e = se.entry
             freshness = f" {se.freshness_label}" if se.freshness_label else ""
             ts = e.created_at[:16] if e.created_at else ""
+            content_text = e.content.get("text", "") if isinstance(e.content, dict) else str(e.content)
             lines.append(
                 f"[id={e.id}] relevance={se.score:.3f}{freshness} created={ts} tags={e.tags}\n"
-                f"  {e.content[:200]}{'...' if len(e.content) > 200 else ''}"
+                f"  {content_text[:200]}{'...' if len(content_text) > 200 else ''}"
             )
         return "Retrieved memories:\n" + "\n".join(lines)
 
@@ -222,9 +223,10 @@ class FilterMemoriesTool(_MemoryTool):
             return "No memories match the filter."
         lines = []
         for e in entries:
+            content_text = e.content.get("text", "") if isinstance(e.content, dict) else str(e.content)
             lines.append(
                 f"[id={e.id}] importance={e.importance} tags={e.tags}\n"
-                f"  {e.content[:200]}{'...' if len(e.content) > 200 else ''}"
+                f"  {content_text[:200]}{'...' if len(content_text) > 200 else ''}"
             )
         return "Filtered memories:\n" + "\n".join(lines)
 
@@ -249,7 +251,7 @@ class SummarizeSessionTool(_MemoryTool):
         # Phase 1: record the description as a memory
         if description:
             entry = self.store.add(
-                content=f"Session note: {description}",
+                content={"text": f"Session note: {description}"},
                 importance=0.5,
                 tags=["session-summary"],
             )

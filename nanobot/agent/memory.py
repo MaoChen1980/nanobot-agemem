@@ -45,6 +45,7 @@ class MemoryStore:
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "history.jsonl"
         self.legacy_history_file = self.memory_dir / "HISTORY.md"
+        self.dream_file = self.memory_dir / "dream.jsonl"
         self.soul_file = workspace / "SOUL.md"
         self.user_file = workspace / "USER.md"
         self._cursor_file = self.memory_dir / ".cursor"
@@ -336,6 +337,28 @@ class MemoryStore:
             "Memory consolidation degraded: raw-archived {} messages", len(messages)
         )
 
+    def append_dream(self, tool_events: list[dict], analysis: str, cursor: int) -> None:
+        """Append Dream processing results to dream.jsonl.
+
+        Each entry is a structured JSON line with timestamp, analysis, and tool events.
+        """
+        ts = datetime.now().isoformat()
+        entry = {
+            "timestamp": ts,
+            "cursor": cursor,
+            "analysis": analysis,
+            "events": [
+                {
+                    "name": ev.get("name"),
+                    "status": ev.get("status"),
+                    "detail": ev.get("detail"),
+                }
+                for ev in (tool_events or [])
+                if ev.get("status") == "ok"
+            ],
+        }
+        with open(self.dream_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -770,6 +793,9 @@ class Dream:
         except Exception:
             logger.exception("Dream Phase 2 failed")
             result = None
+
+        # Log Dream output to dream.jsonl
+        self.store.append_dream(result.tool_events if result else [], analysis, batch[-1]["cursor"])
 
         # Build changelog from tool events
         changelog: list[str] = []

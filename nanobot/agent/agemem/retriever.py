@@ -15,6 +15,13 @@ from nanobot.agent.agemem.entry import MemoryEntry
 from nanobot.agent.agemem.store import MemoryStoreV2
 
 
+def _content_to_text(content: dict[str, Any] | str) -> str:
+    """Extract text from memory entry content (dict or legacy str)."""
+    if isinstance(content, dict):
+        return content.get("text", "") or str(content)
+    return content
+
+
 # Freshness halflife in days — entries lose half their freshness weight each halflife
 _FRESHNESS_HALFLIFE_DAYS = 7.0
 # Scoring weights: relevance (BM25), importance, freshness
@@ -60,10 +67,10 @@ class MemoryRetriever:
 
         # Build BM25 scores
         scored = []
-        avg_dl = sum(len(self._tokenize(e.content)) for e in entries) / max(len(entries), 1)
+        avg_dl = sum(len(self._tokenize(_content_to_text(e.content))) for e in entries) / max(len(entries), 1)
 
         for entry in entries:
-            doc_terms = self._tokenize(entry.content)
+            doc_terms = self._tokenize(_content_to_text(entry.content))
             if not doc_terms:
                 continue
             bm25 = self._bm25_score(query_terms, doc_terms, avg_dl, len(entries))
@@ -203,7 +210,7 @@ class MemoryRetriever:
             if term not in doc_tf:
                 continue
             tf = doc_tf[term]
-            df = sum(1 for e in self._store.get_all() if term in self._tokenize(e.content))
+            df = sum(1 for e in self._store.get_all() if term in self._tokenize(_content_to_text(e.content)))
             if df == 0:
                 df = 1
 

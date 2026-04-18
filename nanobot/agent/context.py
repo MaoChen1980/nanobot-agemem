@@ -71,7 +71,7 @@ class ContextBuilder:
             lines.append(f"- {src} {ts}{freshness} {tags} {e.content[:150]}{'...' if len(e.content) > 150 else ''}")
 
         return (
-            "[记忆参考 — 仅供参考，可能有偏差，不保证准确]\n"
+            "[记忆参考]\n"
             + "\n".join(lines)
             + "\n[/记忆参考]"
         )
@@ -105,10 +105,10 @@ class ContextBuilder:
                 # Extract most recent [YYYY-MM-DD] or [YYYY-MM-DD HH:MM] from content
                 latest_ts = self._extract_latest_timestamp(memory_content)
                 if latest_ts:
-                    mtime_ts = f"\n\n> MEMORY.md 最新记录: {latest_ts}（内容可能已过期，请结合上方 AgeMem 记忆参考判断）"
+                    mtime_ts = f"\n\n> MEMORY.md 最新记录: {latest_ts}"
                 else:
                     mtime_ts = ""
-                parts.append(f"# 记忆参考（仅供参考，可能有偏差）{mtime_ts}\n\n{memory_content}")
+                parts.append(f"# 记忆参考{mtime_ts}\n\n{memory_content}")
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -123,7 +123,7 @@ class ContextBuilder:
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
         if entries:
             capped = entries[-self._MAX_RECENT_HISTORY:]
-            parts.append("# 历史记录参考（仅供参考，可能有偏差）\n\n" + "\n".join(
+            parts.append("# 历史记录参考\n\n" + "\n".join(
                 f"- [{e['timestamp']}] {e['content']}" for e in capped
             ))
 

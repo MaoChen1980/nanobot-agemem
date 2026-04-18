@@ -185,11 +185,12 @@ def test_get_history_preserves_reasoning_content():
     history = session.get_history(max_messages=500)
 
     assert history == [
-        {"role": "user", "content": "hi"},
+        {"role": "user", "content": "hi", "timestamp": None},
         {
             "role": "assistant",
             "content": "done",
             "reasoning_content": "hidden chain of thought",
+            "timestamp": None,
         },
     ]
 

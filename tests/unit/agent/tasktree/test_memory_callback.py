@@ -18,7 +18,7 @@ class FakeMemoryStore:
     def __init__(self):
         self.entries = []
 
-    def add(self, content: str, importance: float, tags: list[str]):
+    def add(self, content: dict, importance: float, tags: list[str]):
         self.entries.append({
             "content": content,
             "importance": importance,
@@ -46,8 +46,8 @@ class TestMemoryCallback:
 
         assert len(store.entries) == 1
         entry = store.entries[0]
-        assert "root.0" in entry["content"]
-        assert "analyzed requirements" in entry["content"]
+        assert "root.0" in entry["content"]["text"]
+        assert "analyzed requirements" in entry["content"]["text"]
         assert entry["importance"] == 0.5
         assert "tasktree" in entry["tags"]
         assert "success" in entry["tags"]
@@ -69,9 +69,9 @@ class TestMemoryCallback:
 
         assert len(store.entries) == 1
         entry = store.entries[0]
-        assert "root.0" in entry["content"]
-        assert "FAILED" in entry["content"]
-        assert "request timed out" in entry["content"]
+        assert "root.0" in entry["content"]["text"]
+        assert "FAILED" in entry["content"]["text"]
+        assert "request timed out" in entry["content"]["text"]
         assert entry["importance"] == 0.7
         assert "failure" in entry["tags"]
         assert "api_timeout" in entry["tags"]
@@ -94,8 +94,8 @@ class TestMemoryCallback:
 
         assert len(store.entries) == 1
         entry = store.entries[0]
-        assert "BLOCKED" in entry["content"]
-        assert "depth exceeded" in entry["content"]
+        assert "BLOCKED" in entry["content"]["text"]
+        assert "depth exceeded" in entry["content"]["text"]
         assert entry["importance"] == 0.7
         assert "blocked" in entry["tags"]
         assert "constraint_veto" in entry["tags"]
@@ -152,5 +152,5 @@ class TestMemoryCallback:
         cb.on_node_done(node2, NodeResult(node_id="root.1", summary="second done"))
 
         assert len(store.entries) == 2
-        assert "first done" in store.entries[0]["content"]
-        assert "second done" in store.entries[1]["content"]
+        assert "first done" in store.entries[0]["content"]["text"]
+        assert "second done" in store.entries[1]["content"]["text"]

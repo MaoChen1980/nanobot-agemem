@@ -13,10 +13,11 @@ class MemoryEntry:
     """
 
     id: str
-    content: str
+    content: dict[str, Any]  # structured fact dict
     importance: float  # 0.0-1.0
     tags: list[str] = field(default_factory=list)
     access_count: int = 0
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
     deleted: bool = False  # soft delete flag
@@ -28,6 +29,7 @@ class MemoryEntry:
             "importance": self.importance,
             "tags": self.tags,
             "access_count": self.access_count,
+            "timestamp": self.timestamp,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "deleted": self.deleted,
@@ -41,6 +43,7 @@ class MemoryEntry:
             importance=d.get("importance", 0.5),
             tags=d.get("tags", []),
             access_count=d.get("access_count", 0),
+            timestamp=d.get("timestamp", datetime.now().isoformat()),
             created_at=d.get("created_at", datetime.now().isoformat()),
             updated_at=d.get("updated_at", datetime.now().isoformat()),
             deleted=d.get("deleted", False),

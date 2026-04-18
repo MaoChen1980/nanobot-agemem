@@ -331,7 +331,7 @@ class MemoryHook(AgentHook):
         # Extract tags from importance signals
         tags = self._extract_tags_from_content(important_content)
         entry_id = self._memory_store.add(
-            content=important_content,
+            content={"text": important_content},
             importance=importance,
             tags=tags,
         )

@@ -1029,7 +1029,11 @@ async def test_next_turn_after_llm_error_keeps_turn_boundary(tmp_path):
     assert second.content == "Recovered answer"
 
     request_messages = provider.chat_with_retry.await_args_list[1].kwargs["messages"]
-    non_system = [message for message in request_messages if message.get("role") != "system"]
+    non_system = [
+        {key: value for key, value in message.items() if key in {"role", "content"}}
+        for message in request_messages
+        if message.get("role") != "system"
+    ]
     assert non_system[0] == {"role": "user", "content": "first question"}
     assert non_system[1] == {
         "role": "assistant",

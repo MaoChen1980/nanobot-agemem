@@ -234,7 +234,7 @@ class TestMemoryHook_Phase2dAutoAdd:
         entries = store.get_all()
         assert len(entries) >= 1
         # Content should mention penicillin or allergy
-        contents = [e.content.lower() for e in entries]
+        contents = [e.content.get("text", "") if isinstance(e.content, dict) else str(e.content) for e in entries]
         assert any("penicillin" in c or "allergic" in c for c in contents)
 
     async def test_auto_add_disabled_respects_flag(self, ws):
